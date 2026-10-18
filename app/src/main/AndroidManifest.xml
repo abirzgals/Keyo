@@ -13,12 +13,16 @@
          project's GitHub releases. The system still shows its own install confirmation. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- Package visibility for the "open <app>" voice command. A targeted <queries> filter replaces
+    <!-- Package visibility: launchable apps for the "open <app>" voice command, and the system
+         speech recognizer for offline dictation. Targeted <queries> filters replace
          QUERY_ALL_PACKAGES, which is a restricted permission a keyboard has no case for. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 

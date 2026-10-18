@@ -60,27 +60,30 @@ object KeyboardPrefs {
     fun unregisterChangeListener(context: Context, l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) =
         prefs(context).unregisterOnSharedPreferenceChangeListener(l)
 
-    fun getModel(context: Context): String {
-        return prefs(context).getString(KEY_MODEL, "openai/gpt-oss-20b") ?: "openai/gpt-oss-20b"
+    /** Model for dictation cleanup and Rewrite. */
+    fun getTextModel(context: Context): String {
+        return prefs(context).getString(KEY_MODEL, GroqApi.DEFAULT_TEXT_MODEL) ?: GroqApi.DEFAULT_TEXT_MODEL
     }
 
-    fun setModel(context: Context, model: String) {
+    fun setTextModel(context: Context, model: String) {
         prefs(context).edit().putString(KEY_MODEL, model).apply()
     }
 
+    /** Model for the assistant and its tools. */
     fun getAiModel(context: Context): String {
-        return prefs(context).getString(KEY_AI_MODEL, "openai/gpt-oss-120b") ?: "openai/gpt-oss-120b"
+        return prefs(context).getString(KEY_AI_MODEL, GroqApi.DEFAULT_AI_MODEL) ?: GroqApi.DEFAULT_AI_MODEL
     }
 
     fun setAiModel(context: Context, model: String) {
         prefs(context).edit().putString(KEY_AI_MODEL, model).apply()
     }
 
-    fun isAutocorrectEnabled(context: Context): Boolean {
+    /** The "Dictation cleanup" switch. Stored under the old "autocorrect" key, which predates typing autocorrect. */
+    fun isDictationCleanup(context: Context): Boolean {
         return prefs(context).getBoolean(KEY_AUTOCORRECT, true)
     }
 
-    fun setAutocorrectEnabled(context: Context, enabled: Boolean) {
+    fun setDictationCleanup(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOCORRECT, enabled).apply()
     }
 

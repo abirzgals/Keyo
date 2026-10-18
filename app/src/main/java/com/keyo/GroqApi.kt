@@ -22,8 +22,10 @@ object GroqApi {
         .build()
     // API key: user-supplied value (from settings) overrides the build-time default.
     var apiKey: String = BuildConfig.GROQ_API_KEY
-    var model: String = "openai/gpt-oss-20b"             // for 🎤 dictation cleanup + ✨ Rewrite (fast)
-    var aiModel: String = "openai/gpt-oss-120b"           // for 🤖 AI assistant + tools
+    const val DEFAULT_TEXT_MODEL = "openai/gpt-oss-20b"
+    const val DEFAULT_AI_MODEL = "openai/gpt-oss-120b"
+    var model: String = DEFAULT_TEXT_MODEL      // dictation cleanup + ✨ Rewrite (fast)
+    var aiModel: String = DEFAULT_AI_MODEL      // assistant + tools
 
     // AI assistant conversation history (last N turns)
     private const val MAX_HISTORY = 10 // pairs of user+assistant messages
@@ -127,7 +129,7 @@ object GroqApi {
                 // The model answered in a language the user never dictates in — that is the bug this
                 // whole path exists for. Ask again, this time not leaving it a choice.
                 detect && lang != null && lang !in allowed -> {
-                    val second = fallback?.takeIf { it in allowed } ?: allowed.first()
+                    val second = retryLanguage(lang, text, allowed, fallback)
                     post(audioFile, second, vocabulary, verbose = false) { t2, _, e2 ->
                         callback(t2, e2)
                     }
@@ -135,6 +137,30 @@ object GroqApi {
                 else -> callback(text, null)
             }
         }
+    }
+
+    /**
+     * Which allowed language to impose when detection picked one the user never speaks.
+     *
+     * The miss is almost always a NEIGHBOUR of what was said: Russian heard as Ukrainian or
+     * Bulgarian, Latvian as Lithuanian. Falling back to the keyboard's language instead turned
+     * Russian spoken on the Latvian keyboard into Latvian-spelled nonsense. So: a known neighbour
+     * maps to its allowed language; otherwise the script of the first pass decides (Cyrillic text is
+     * Russian here); only then the keyboard's language.
+     */
+    internal fun retryLanguage(detected: String, firstPass: String?, allowed: List<String>, fallback: String?): String {
+        val neighbour = when (detected) {
+            "ukrainian", "belarusian", "bulgarian", "serbian", "macedonian", "kazakh", "uk", "be", "bg", "sr", "mk", "kk" -> "ru"
+            "lithuanian", "estonian", "lt", "et" -> "lv"
+            else -> null
+        }
+        if (neighbour != null && neighbour in allowed) return neighbour
+        val letters = firstPass.orEmpty().filter { it.isLetter() }
+        if (letters.isNotEmpty() && "ru" in allowed) {
+            val cyrillic = letters.count { it in '\u0400'..'\u04FF' }
+            if (cyrillic * 2 > letters.length) return "ru"
+        }
+        return fallback?.takeIf { it in allowed } ?: allowed.first()
     }
 
     /** verbose_json reports the detected language as an English NAME ("russian"), not the ISO code

@@ -14,7 +14,9 @@ import android.widget.EditText
 import android.widget.LinearLayout
 
 /**
- * Debug-only playground replicating problem fields from real apps (not shipped in release).
+ * Debug-only playground replicating problem fields from real apps (not shipped in release):
+ * messenger message boxes with and without an Enter action, search fields, a raw TYPE_NULL view
+ * like a remote-desktop client, and the WhatsApp PIN prompt.
  * Case "wa": WhatsApp's two-step-verification PIN prompt — CodeInputField is an EditText with
  * inputType=number, digits="0123456789", password dots via transformation (NOT numberPassword),
  * imeOptions=NO_EXTRACT_UI|NO_FULLSCREEN, auto-focused in a dialog that force-shows the IME.
@@ -223,6 +225,8 @@ class FieldTestActivity : Activity() {
                     .setView(field)
                     .setPositiveButton("OK", null)
                     .create()
+                // Deprecated, but it is what the replicated app's dialog sets.
+                @Suppress("DEPRECATION")
                 dlg.window?.setSoftInputMode(
                     WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
                     WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE

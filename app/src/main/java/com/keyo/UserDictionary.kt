@@ -8,7 +8,7 @@ import org.json.JSONObject
  *  - unigram counts (how often each word is used) — boosts completion ranking, and
  *  - bigram counts (which word tends to follow which) — drives next-word prediction.
  *
- * Kept in memory and persisted to SharedPreferences as JSON, debounced via [save]. Sizes are capped
+ * Kept in memory and persisted to SharedPreferences as JSON by [save] (only when something changed). Sizes are capped
  * so the store can't grow unbounded. Never call [learn] for text from secure/password fields.
  */
 object UserDictionary {
@@ -25,7 +25,8 @@ object UserDictionary {
 
     // @Volatile vars (not vals): ensureLoaded builds fresh maps on the IO thread and publishes them
     // atomically, so main-thread readers see either the old map or the complete new one — never a
-    // HashMap mid-population. All mutation goes through synchronized methods.
+    // HashMap mid-population. All mutation goes through synchronized methods; the Settings-screen
+    // readers (count, wordsByFrequency, bigrams) read without the lock and may see a stale count.
     @Volatile private var unigram = HashMap<String, Int>()
     @Volatile private var bigram = HashMap<String, HashMap<String, Int>>()
 

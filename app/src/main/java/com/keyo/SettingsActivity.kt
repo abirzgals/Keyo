@@ -47,7 +47,7 @@ class SettingsActivity : ComponentActivity() {
     // Deep-link target (e.g. "phrases") so we can open straight to that screen.
     private val deepLink = mutableStateOf<String?>(null)
     // Newer release found by the launch check: drives the home banner and pre-fills About.
-    private val pendingUpdate = mutableStateOf<UpdateChecker.Release?>(null)
+    private val pendingUpdate = UpdateFlow.found
 
     private val requestPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -59,14 +59,17 @@ class SettingsActivity : ComponentActivity() {
         if (!granted && !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) openAppSettings()
     }
 
-    // A downloaded, verified update waiting for the "install unknown apps" permission. Kept on the
-    // activity so it survives the trip to the system settings screen and is installed on return.
-    private var pendingInstall by mutableStateOf<java.io.File?>(null)
+    // A downloaded, verified update waiting for the "install unknown apps" permission, installed
+    // on return from the system settings screen.
+    private var pendingInstall by UpdateFlow.pendingInstall
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Only a fresh launch follows the deep link; on a configuration change the saved screen wins.
         if (savedInstanceState == null) deepLink.value = intent?.getStringExtra("section")
+        // Every time Settings is opened, but not on a rotation. The keyboard's process lives for
+        // days, so "once per process" would mean a release published since then is never offered.
+        if (savedInstanceState == null && pendingUpdate.value == null) checkForUpdateOnLaunch()
         setContent { SettingsApp() }
     }
 
@@ -159,8 +162,12 @@ class SettingsActivity : ComponentActivity() {
             }
             if (deepLink.value != null) deepLink.value = null
         }
-        // Once per process: the state lives on the activity, so it survives configuration changes.
-        LaunchedEffect(Unit) { if (pendingUpdate.value == null) checkForUpdateOnLaunch() }
+        // A download that finished hands its file over here rather than to the activity that
+        // started it: that one may have been recreated by a rotation in the meantime.
+        val ready = UpdateFlow.ready.value
+        LaunchedEffect(ready) {
+            if (ready != null) { UpdateFlow.ready.value = null; tryInstall(ready) }
+        }
         Surface(modifier = Modifier.fillMaxSize(), color = bg) {
             // targetSdk 35 enforces edge-to-edge: keep content clear of the status/navigation bars
             // and the on-screen keyboard (e.g. while typing the API key) — the Surface still paints
@@ -424,9 +431,9 @@ class SettingsActivity : ComponentActivity() {
 
     @Composable
     private fun VoiceAiScreen(onBack: () -> Unit) {
-        var selectedModel by remember { mutableStateOf(KeyboardPrefs.getModel(this@SettingsActivity)) }
+        var selectedModel by remember { mutableStateOf(KeyboardPrefs.getTextModel(this@SettingsActivity)) }
         var selectedAiModel by remember { mutableStateOf(KeyboardPrefs.getAiModel(this@SettingsActivity)) }
-        var autocorrect by remember { mutableStateOf(KeyboardPrefs.isAutocorrectEnabled(this@SettingsActivity)) }
+        var autocorrect by remember { mutableStateOf(KeyboardPrefs.isDictationCleanup(this@SettingsActivity)) }
         var instantDictation by remember { mutableStateOf(KeyboardPrefs.isInstantDictation(this@SettingsActivity)) }
 
         SubScreen("Voice & AI", onBack) {
@@ -435,14 +442,14 @@ class SettingsActivity : ComponentActivity() {
             // `aiModel` only the hold-to-speak assistant. The old labels had Rewrite under the
             // assistant model, so changing that picker did nothing to Rewrite.
             ModelSelector("Dictation & rewrite model", "Tidies dictation; powers ✨ Rewrite, Translate, Continue", KeyboardPrefs.AVAILABLE_MODELS, selectedModel) { id ->
-                selectedModel = id; KeyboardPrefs.setModel(this@SettingsActivity, id); GroqApi.model = id
+                selectedModel = id; KeyboardPrefs.setTextModel(this@SettingsActivity, id); GroqApi.model = id
             }
             ModelSelector("Voice assistant model", "Runs hold-to-speak tasks and their tools (alarm, timer, open app…)", KeyboardPrefs.AVAILABLE_MODELS, selectedAiModel) { id ->
                 selectedAiModel = id; KeyboardPrefs.setAiModel(this@SettingsActivity, id); GroqApi.aiModel = id
             }
             Group {
                 ToggleRow("Dictation cleanup", "Tidies up dictation: punctuation, fillers, casing", autocorrect) {
-                    autocorrect = it; KeyboardPrefs.setAutocorrectEnabled(this@SettingsActivity, it)
+                    autocorrect = it; KeyboardPrefs.setDictationCleanup(this@SettingsActivity, it)
                 }
                 Sep()
                 ToggleRow("Instant dictation", "With cleanup on: insert the text right away, then tidy it a moment later — instead of waiting for both steps", instantDictation) {
@@ -673,28 +680,32 @@ class SettingsActivity : ComponentActivity() {
 
     /** Checks GitHub for a newer release and, if the user wants it, downloads and installs it.
      *  Keyo is side-loaded, so without this there is nothing to tell anyone an update exists. */
+    private fun tryInstall(file: java.io.File) {
+        installApk(file,
+            onNeedPermission = {
+                pendingInstall = file
+                UpdateFlow.state.value = "permission"
+                UpdateFlow.message.value = "Allow Keyo to install apps on the screen that just opened, then come back here"
+            },
+            // The installer is up. Should the user cancel it, the card offers the button again,
+            // and the verified file in the cache means no second download.
+            onStarted = { UpdateFlow.state.value = "found" },
+            onError = { e -> UpdateFlow.state.value = "error"; UpdateFlow.message.value = e })
+    }
+
     @Composable
     private fun UpdateGroup() {
         // Seeded from the launch check so arriving via the home banner lands straight on the
         // install button rather than making the user check for the same release twice.
         val found = pendingUpdate.value
         // idle | checking | found | none | downloading | permission | error
-        var state by remember { mutableStateOf(if (found != null) "found" else "idle") }
-        var release by remember { mutableStateOf(found) }
-        var progress by remember { mutableIntStateOf(-1) }
-        var message by remember { mutableStateOf("") }
+        val state = UpdateFlow.state.value.let { if (it == "idle" && found != null) "found" else it }
+        val release = UpdateFlow.release.value ?: found
+        val progress = UpdateFlow.progress.intValue
+        val message = UpdateFlow.message.value
+        fun setState(s: String, msg: String = "") { UpdateFlow.state.value = s; UpdateFlow.message.value = msg }
 
-        fun tryInstall(file: java.io.File) {
-            installApk(file,
-                onNeedPermission = {
-                    pendingInstall = file
-                    state = "permission"
-                    message = "Allow Keyo to install apps on the screen that just opened, then come back here"
-                },
-                onError = { e -> state = "error"; message = e })
-        }
-        // Back from the system screen with the permission granted: finish what was started. This
-        // used to dead-end in "error" with the APK already sitting in the cache.
+        // Back from the system screen with the permission granted: finish what was started.
         val resumed = resumeTick.value
         LaunchedEffect(resumed) {
             val f = pendingInstall ?: return@LaunchedEffect
@@ -722,40 +733,41 @@ class SettingsActivity : ComponentActivity() {
                 if (state == "found" || state == "permission") {
                     PrimaryButton(if (state == "permission") "Install" else "Download and install") {
                         val r = release ?: return@PrimaryButton
+                        UpdateFlow.release.value = r
                         val dest = java.io.File(cacheDir, "updates/Keyo-${r.version}.apk")
                         // Already downloaded and verified (the permission detour, a cancelled
                         // installer): straight to the installer, no second download.
                         val ready = pendingInstall?.takeIf { it.exists() } ?: dest.takeIf { it.exists() }
+                        UpdateFlow.progress.intValue = -1
+                        setState("downloading")
                         if (ready != null) {
-                            state = "downloading"; progress = -1
                             Thread {
                                 val problem = try { UpdateChecker.verify(ready, r) } catch (e: Exception) { e.message ?: "unreadable file" }
-                                runOnUiThread {
-                                    if (problem == null) tryInstall(ready)
-                                    else { ready.delete(); pendingInstall = null; state = "error"; message = problem }
+                                UpdateFlow.post {
+                                    if (problem == null) UpdateFlow.ready.value = ready
+                                    else { ready.delete(); pendingInstall = null; setState("error", problem) }
                                 }
                             }.start()
                             return@PrimaryButton
                         }
-                        state = "downloading"; progress = -1
                         UpdateChecker.download(r, dest, onProgress = { p ->
-                            runOnUiThread { progress = p }
+                            UpdateFlow.post { UpdateFlow.progress.intValue = p }
                         }) { file, err ->
-                            runOnUiThread {
-                                if (file == null) { state = "error"; message = err ?: "Download failed" }
-                                else tryInstall(file)
+                            UpdateFlow.post {
+                                if (file == null) setState("error", err ?: "Download failed")
+                                else UpdateFlow.ready.value = file
                             }
                         }
                     }
                 } else if (state != "checking" && state != "downloading") {
                     PrimaryButton("Check for updates") {
-                        state = "checking"
+                        setState("checking")
                         UpdateChecker.check(BuildConfig.VERSION_NAME) { r, err ->
-                            runOnUiThread {
+                            UpdateFlow.post {
                                 when {
-                                    err != null -> { state = "error"; message = err }
-                                    r == null -> state = "none"
-                                    else -> { release = r; state = "found" }
+                                    err != null -> setState("error", err)
+                                    r == null -> setState("none")
+                                    else -> { UpdateFlow.release.value = r; setState("found") }
                                 }
                             }
                         }
@@ -768,7 +780,7 @@ class SettingsActivity : ComponentActivity() {
     /** Hand the downloaded APK to the system installer (which asks the user to confirm).
      *  [onNeedPermission] fires instead when the one-time "install unknown apps" permission is
      *  missing; the system screen for it has been opened by then. */
-    private fun installApk(file: java.io.File, onNeedPermission: () -> Unit, onError: (String) -> Unit) {
+    private fun installApk(file: java.io.File, onNeedPermission: () -> Unit, onStarted: () -> Unit, onError: (String) -> Unit) {
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
                 !packageManager.canRequestPackageInstalls()) {
@@ -785,6 +797,7 @@ class SettingsActivity : ComponentActivity() {
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
                          android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             })
+            onStarted()
         } catch (e: Exception) {
             onError(e.message ?: "Couldn't start the installer")
         }
@@ -827,7 +840,7 @@ class SettingsActivity : ComponentActivity() {
 
     // ============================== Composite pieces ==============================
 
-    /** Groq API key editor (text field + Save/Test + helper links). Used on the Voice & AI screen. */
+    /** Groq API key editor (text field + Save/Test + helper links). Used on the Setup and Voice & AI screens. */
     @Composable
     private fun ApiKeyGroup() {
         var apiKey by remember { mutableStateOf(KeyboardPrefs.getApiKey(this@SettingsActivity)) }
@@ -1279,4 +1292,23 @@ class SettingsActivity : ComponentActivity() {
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
         }
     }
+}
+
+/** The update flow's state, kept for the life of the PROCESS rather than of one screen: the About
+ *  card leaves the composition on Back and the activity is recreated on rotation, while a download
+ *  keeps running. Held per screen, the card forgot a running download, offered the button again,
+ *  and a second tap deleted the half-written file under it. */
+private object UpdateFlow {
+    val found = mutableStateOf<UpdateChecker.Release?>(null)
+    // idle | checking | found | none | downloading | permission | error
+    val state = mutableStateOf("idle")
+    val release = mutableStateOf<UpdateChecker.Release?>(null)
+    val progress = mutableIntStateOf(-1)
+    val message = mutableStateOf("")
+    /** A verified APK for whichever activity is current to hand to the installer. */
+    val ready = mutableStateOf<java.io.File?>(null)
+    val pendingInstall = mutableStateOf<java.io.File?>(null)
+
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    fun post(block: () -> Unit) { main.post(block) }
 }

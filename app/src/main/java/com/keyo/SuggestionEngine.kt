@@ -554,11 +554,6 @@ object SuggestionEngine {
         return if (best.score + margin < typedScore) best.word else null
     }
 
-    /** Gboard-style dynamic key targets: decide which key a tap near a key boundary actually meant.
-     *  [cands] = the two nearest keys with their distances from the tap point in cells
-     *  (nearest first); [strength] scores how well a key continues the word being typed (e.g.
-     *  [prefixStrength] of prefix+key). Keeps [tapped] unless the alternative wins clearly on the
-     *  combined spatial × language score — dead-centre taps are never second-guessed. */
     /** How close the runner-up must be before it is even considered, and how decisively it must win
      *  to override the key the finger actually landed on.
      *
@@ -572,6 +567,11 @@ object SuggestionEngine {
     internal const val NEAR_GATE = 0.75f
     internal const val WIN_MARGIN = 1.10f
 
+    /** Gboard-style dynamic key targets: decide which key a tap near a key boundary actually meant.
+     *  [cands] = the two nearest keys with their distances from the tap point in cells
+     *  (nearest first); [strength] scores how well a key continues the word being typed (e.g.
+     *  [prefixStrength] of prefix+key). Keeps [tapped] unless the alternative wins clearly on the
+     *  combined spatial × language score — dead-centre taps are never second-guessed. */
     internal fun chooseKey(
         tapped: Char,
         cands: List<Pair<Char, Float>>,

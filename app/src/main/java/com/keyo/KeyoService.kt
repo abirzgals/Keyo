@@ -78,27 +78,27 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         serviceJob + kotlinx.coroutines.Dispatchers.Main.immediate
     )
 
-    private var currentLang = mutableStateOf("en")          // "en", "ru", "lv"
-    private var enabledLangs = mutableStateOf(listOf("en", "ru"))
-    private var isRecording = mutableStateOf(false)
-    private var isRecordingAI = mutableStateOf(false)
-    private var statusText = mutableStateOf("")
-    private var isShift = mutableStateOf(false)
-    private var keyboardMode = mutableStateOf("abc") // "abc", "123", "symbols", "numpad", "mini", "emoji", "clipboard", "rewrite"
+    private val currentLang = mutableStateOf("en")          // "en", "ru", "lv"
+    private val enabledLangs = mutableStateOf(listOf("en", "ru"))
+    private val isRecording = mutableStateOf(false)
+    private val isRecordingAI = mutableStateOf(false)
+    private val statusText = mutableStateOf("")
+    private val isShift = mutableStateOf(false)
+    private val keyboardMode = mutableStateOf("abc") // "abc", "123", "symbols", "numpad", "mini", "emoji", "clipboard", "rewrite"
     // The focused field's raw imeOptions. Stored whole rather than pre-digested into separate flags:
     // the Enter key's meaning is one decision made from all of them together ([EnterBehavior]), and
     // splitting it up is how the label and the behaviour drifted apart in the first place.
-    private var fieldImeOptions = mutableIntStateOf(0)
-    private var showNumberRow = mutableStateOf(true)
+    private val fieldImeOptions = mutableIntStateOf(0)
+    private val showNumberRow = mutableStateOf(true)
     // Visual sizing (tunable live via the Settings sliders)
-    private var keyHeightDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_KEY_HEIGHT)
-    private var keyHGapDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_HGAP)
-    private var keyVGapDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_VGAP)
-    private var bottomOffsetDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_BOTTOM_OFFSET)
-    private var hapticStrength = mutableStateOf("light")    // off / light / medium / strong
+    private val keyHeightDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_KEY_HEIGHT)
+    private val keyHGapDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_HGAP)
+    private val keyVGapDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_VGAP)
+    private val bottomOffsetDp = mutableIntStateOf(KeyboardPrefs.DEFAULT_BOTTOM_OFFSET)
+    private val hapticStrength = mutableStateOf("light")    // off / light / medium / strong
     private var currentTheme = KeyboardPrefs.KeyboardTheme("catppuccin","",0xFF1E1E2E,0xFF313244,0xFFBB86FC,0xFFCDD6F4)
-    private var soundEnabled = mutableStateOf(false)
-    private var themeId = mutableStateOf("catppuccin")
+    private val soundEnabled = mutableStateOf(false)
+    private val themeId = mutableStateOf("catppuccin")
 
     // True only for PASSWORD fields. In these we never send anything to the network (no voice
     // transcription, no AI), show no suggestions and use no composing region.
@@ -234,35 +234,35 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     /** Stamp "the keyboard just edited the field". onUpdateSelection uses this to tell our own
      *  callbacks from a caret move the USER made — so every path that writes to the
      *  InputConnection must call it, not just the plain keystroke ones. */
-    private fun markSelfEdit() { lastSelfEditMs = System.currentTimeMillis() }
+    private fun markSelfEdit() { lastSelfEditMs = android.os.SystemClock.uptimeMillis() }
     // Live glide preview: the current best guess shown above the keys while the finger is still
     // swiping (Gboard-style). Throttled: one background decode in flight, every ~6 new points.
     private val glidePreview = mutableStateOf<String?>(null)
     private var glidePreviewBusy = false
     private var glidePreviewAt = 0
 
-    private var clipHistory = mutableStateOf<List<String>>(emptyList())
-    private var pinnedClips = mutableStateOf<List<String>>(emptyList())
-    private var emojiCategory = mutableIntStateOf(0)        // emoji panel category
-    private var isCapsLock = mutableStateOf(false)
+    private val clipHistory = mutableStateOf<List<String>>(emptyList())
+    private val pinnedClips = mutableStateOf<List<String>>(emptyList())
+    private val emojiCategory = mutableIntStateOf(0)        // emoji panel category
+    private val isCapsLock = mutableStateOf(false)
     private var lastShiftTapMs = 0L
     private var shiftIsAuto = false   // true when Shift was turned on by auto-capitalize (not the user)
     // Undo last AI rewrite
-    private var showUndoRewrite = mutableStateOf(false)
+    private val showUndoRewrite = mutableStateOf(false)
     private var rewriteBackup = ""
     private var rewriteResult = ""
     private val hideUndoRewrite = Runnable { showUndoRewrite.value = false }
     // Dynamic top toolbar: a freshly-copied snippet shows as a quick-paste chip for a while.
-    private var showClipChip = mutableStateOf(false)
-    private var lastClip = mutableStateOf("")
+    private val showClipChip = mutableStateOf(false)
+    private val lastClip = mutableStateOf("")
     private val hideClipChip = Runnable { showClipChip.value = false }
 
     // Live suggestion strip. When the user is typing a word we show suggestions here;
     // when idle the same row shows the toolbar menu. `toolbarPinned` lets the user open the menu
     // while typing (via a small chevron) and is auto-reset once the row goes idle.
-    private var suggestions = mutableStateOf<List<String>>(emptyList())
-    private var primarySuggestion = mutableStateOf<String?>(null)
-    private var toolbarPinned = mutableStateOf(false)
+    private val suggestions = mutableStateOf<List<String>>(emptyList())
+    private val primarySuggestion = mutableStateOf<String?>(null)
+    private val toolbarPinned = mutableStateOf(false)
     // The save builds a JSON document of up to 4000 words and 30000 pairs; that is I/O-thread
     // work, and it used to run on the main handler exactly when the user paused and resumed typing.
     private val saveUserDict = Runnable {
@@ -274,7 +274,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Confirmation prompt for consequential AI actions (timer, alarm, clipboard). When set, a bar with
     // Confirm / Cancel appears; the assistant's tool loop suspends on `confirmDeferred` until tapped.
-    private var pendingConfirm = mutableStateOf<String?>(null)
+    private val pendingConfirm = mutableStateOf<String?>(null)
     private var confirmDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
 
     private val clipboardManager: android.content.ClipboardManager? by lazy {
@@ -313,7 +313,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     }
 
     private fun reloadPrefs() {
-        GroqApi.model = KeyboardPrefs.getModel(this)
+        GroqApi.model = KeyboardPrefs.getTextModel(this)
         GroqApi.aiModel = KeyboardPrefs.getAiModel(this)
         showNumberRow.value = KeyboardPrefs.isNumberRowEnabled(this)
         keyHeightDp.intValue = KeyboardPrefs.getKeyHeight(this)
@@ -720,7 +720,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         KeyboardPrefs.fontSizeSp(rowHeightDp(), keyVGapDp.intValue).sp
 
     @Composable
-    fun KeyboardLayout() {
+    private fun KeyboardLayout() {
         val lang by currentLang
         val shift by isShift
         val mode by keyboardMode
@@ -1270,7 +1270,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Dynamic top toolbar (Gboard-style): status text, a quick-paste chip, or action icons.
     @Composable
-    fun TopToolbar(textColor: Color, accentColor: Color) {
+    private fun TopToolbar(textColor: Color, accentColor: Color) {
         // Read statusText HERE (not in KeyboardLayout) so a status change (voice/AI/hints) recomposes
         // only this toolbar, never the key grid.
         val status by statusText
@@ -1415,7 +1415,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Emoji-only panel (mode == "emoji"). No clipboard here.
     @Composable
-    fun EmojiPanel(
+    private fun EmojiPanel(
         keyHeight: androidx.compose.ui.unit.Dp,
         keyColor: Color,
         textColor: Color,
@@ -1475,7 +1475,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Clipboard-only panel (mode == "clipboard"). No emoji here.
     @Composable
-    fun ClipboardPanel(
+    private fun ClipboardPanel(
         keyHeight: androidx.compose.ui.unit.Dp,
         keyColor: Color,
         textColor: Color,
@@ -1569,7 +1569,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     // Shared space bar: tap = space, hold still = dictate, swipe = cursor slider.
     // Used in the main keyboard and in the emoji/clipboard panels so behaviour is identical.
     @Composable
-    fun SpaceKey(
+    private fun SpaceKey(
         modifier: Modifier,
         label: String,
         keyColor: Color,
@@ -1751,7 +1751,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // AI rewrite panel (mode == "rewrite").
     @Composable
-    fun RewritePanel(
+    private fun RewritePanel(
         keyHeight: androidx.compose.ui.unit.Dp,
         keyColor: Color,
         textColor: Color,
@@ -1836,7 +1836,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Enter key with a drawn icon + press feedback.
     @Composable
-    fun EnterKey(
+    private fun EnterKey(
         kind: String,
         bgColor: Color,
         iconColor: Color,
@@ -1970,7 +1970,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Language key — a monochrome globe drawn so it matches the key text colour (not a colored emoji).
     @Composable
-    fun LanguageKey(
+    private fun LanguageKey(
         keyColor: Color,
         iconColor: Color,
         height: androidx.compose.ui.unit.Dp,
@@ -2011,7 +2011,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     // Shift key with a bold, wide, solid shift glyph drawn directly (so it never looks thin).
     @Composable
-    fun ShiftKey(
+    private fun ShiftKey(
         active: Boolean,
         keyColor: Color,
         accentColor: Color,
@@ -2079,7 +2079,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     }
 
     @Composable
-    fun BackspaceKey(bgColor: Color, textColor: Color, modifier: Modifier) {
+    private fun BackspaceKey(bgColor: Color, textColor: Color, modifier: Modifier) {
         var isPressed by remember { mutableStateOf(false) }
         var swipedClear by remember { mutableStateOf(false) }
         val bsHeight = rowHeight()
@@ -2104,11 +2104,11 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         deleteSmart(false)
 
                         // Background job for repeat delete
-                        val startTime = System.currentTimeMillis()
+                        val startTime = android.os.SystemClock.uptimeMillis()
                         val job = serviceScope.launch {
                             kotlinx.coroutines.delay(LONG_PRESS_MS)
                             while (isPressed && !didSwipeClear) {
-                                val elapsed = System.currentTimeMillis() - startTime
+                                val elapsed = android.os.SystemClock.uptimeMillis() - startTime
                                 val byWord = elapsed > 2000
                                 deleteSmart(byWord)
                                 val delay = when {
@@ -2168,7 +2168,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         }
     }
 
-    private var recentEmoji = mutableStateOf<List<String>>(emptyList())
+    private val recentEmoji = mutableStateOf<List<String>>(emptyList())
 
     // Spoken label for TalkBack / accessibility services. Used for the labels a generic key
     // (or the mode key) can carry — every other dedicated key (Enter, Backspace, Shift, Space, the
@@ -2318,7 +2318,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     }
 
     @Composable
-    fun KeyButton(
+    private fun KeyButton(
         label: String,
         bgColor: Color,
         textColor: Color,
@@ -2663,7 +2663,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                                 }
                                 if (longPressed) {
                                     aiDragX = change.position.x - down.position.x
-                                    if (aiDragX < -cancelThreshold) aiCancelled = true
+                                    aiCancelled = aiDragX < -cancelThreshold
                                 }
                                 change.consume()
                             }
@@ -3659,7 +3659,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 // arriving while the keyboard is idle is a genuine external finalize (e.g. the app's
                 // own TextWatcher) — keeping the buffer then would duplicate the word on the next key.
                 candidatesStart == -1 -> {
-                    val staleRace = System.currentTimeMillis() - lastSelfEditMs < 500 &&
+                    val staleRace = android.os.SystemClock.uptimeMillis() - lastSelfEditMs < 500 &&
                         currentWordBeforeCursor().endsWith(composing.toString())
                     if (!staleRace) composing.clear()
                 }
@@ -3685,7 +3685,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         // disarms the one-tap undo state. Backspace-revert and the "↩ word" chip match by TEXT only,
         // so parked at ANOTHER occurrence of the same word — and "the " is everywhere — they would
         // rewrite that unrelated one instead; the glide undo would swallow a whole innocent word.
-        if (System.currentTimeMillis() - lastSelfEditMs >= 500) {
+        if (android.os.SystemClock.uptimeMillis() - lastSelfEditMs >= 500) {
             autocorrectUndo = null
             glideWord = null
             glideAlts = emptyList()
@@ -3821,20 +3821,26 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
             openSettings("languages")
             return
         }
-        finalizeComposing()   // commit the current word before switching
         val idx = cycle.indexOf(currentLang.value)
         val next = if (idx < 0) cycle[0] else cycle[(idx + 1) % cycle.size]
-        val layoutChanged = layoutOf(next) != layoutOf(currentLang.value)
-        currentLang.value = next
-        KeyboardPrefs.setCurrentLanguage(this, next)
+        switchLanguage(next)
+        syncImeSubtype(next)   // best-effort: tell the OS our language (UI already switched)
+        updateSuggestions()
+    }
+
+    /** Everything a language change resets — one copy for the globe key and for the OS switching
+     *  our subtype, which used to differ (the OS path kept the half-typed word and the reverts). */
+    private fun switchLanguage(lang: String) {
+        finalizeComposing()   // commit the current word before switching
+        val layoutChanged = layoutOf(lang) != layoutOf(currentLang.value)
+        currentLang.value = lang
+        KeyboardPrefs.setCurrentLanguage(this, lang)
         if (layoutChanged) {
             keyBounds.clear()      // a different layout's keys re-register their positions for glide
-            keyNeighbors = emptyMap()   // recomputed lazily for the new layout
+            keyNeighbors = emptyMap()   // recomputed lazily for the new layout; en<->lv share positions
         }
         recentTaps.clear()          // tap points belong to the previous language
         revertedWords.clear()       // reverts are per-language decisions (e.g. "cau" EN vs LV)
-        syncImeSubtype(next)   // best-effort: tell the OS our language (UI already switched)
-        updateSuggestions()
     }
 
     /** Best-effort: tell the OS which language we're typing by switching our IME subtype, so the
@@ -3884,11 +3890,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         super.onCurrentInputMethodSubtypeChanged(newSubtype)
         val lang = subtypeLang(newSubtype) ?: return
         if (lang != currentLang.value) {
-            val layoutChanged = layoutOf(lang) != layoutOf(currentLang.value)
-            currentLang.value = lang
-            KeyboardPrefs.setCurrentLanguage(this, lang)
-            if (layoutChanged) { keyBounds.clear(); keyNeighbors = emptyMap() }   // en<->lv keep the same Latin key positions
-            recentTaps.clear()   // tap points belong to the previous language
+            switchLanguage(lang)
             // The OS can hand us a language that isn't in enabledLangs — its dictionary was never
             // loaded and everything would silently fall back to English until the next field start.
             serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -4157,7 +4159,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     private fun onShiftTap() {
         performKeyFeedback()
         shiftIsAuto = false   // this is a deliberate Shift, so it enables selection on space-swipe
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.uptimeMillis()
         // Caps lock exits FIRST: otherwise a third quick tap re-entered the double-tap branch and
         // caps could only be released after pausing for 300 ms.
         if (isCapsLock.value) {
@@ -4430,9 +4432,8 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 currentInputConnection?.finishComposingText()
             } catch (_: Exception) {}
             isRecording.value = false
-            if (!silent) {
-                showStatus("✕ Cancelled", 1500)
-            }
+            if (silent) { if (statusText.value == "🎤 Recording (on-device)…") statusText.value = "" }
+            else showStatus("✕ Cancelled", 1500)
             return
         }
         try {
@@ -4467,7 +4468,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 GroqApi.transcribe(audioFile, dictationLangs(), whisperLangOf(currentLang.value), dictationVocabulary()) { text, error ->
                     audioFile.delete()   // don't leave the recorded speech sitting in the cache
                     if (text != null) {
-                        val cleanup = KeyboardPrefs.isAutocorrectEnabled(this@KeyoService)
+                        val cleanup = KeyboardPrefs.isDictationCleanup(this@KeyoService)
                         // No instant swap in raw key-event fields: the later delete-and-retype would
                         // replay as a burst of Backspace+typing on the remote machine (phantom hotkeys).
                         val instant = KeyboardPrefs.isInstantDictation(this@KeyoService) && !rawKeyField()
@@ -4591,7 +4592,11 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     private fun stopCustomRewriteRecording() {
         if (!customRecording) return
         customRecording = false
-        val f = File.createTempFile("rewrite_", ".wav", cacheDir)
+        val f = try { File.createTempFile("rewrite_", ".wav", cacheDir) } catch (e: java.io.IOException) {
+            rewriteRecorder.discard()   // or the mic stays on
+            showStatus("⚠ Error: ${e.message}")
+            return
+        }
         if (rewriteRecorder.stop(f)) {
             statusText.value = "⏳ Transcribing…"
             GroqApi.transcribe(f, dictationLangs(), whisperLangOf(currentLang.value), dictationVocabulary()) { instr, err ->
@@ -4694,6 +4699,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 showStatus("⚠ Recording too short", 2000)
             }
         } catch (e: Exception) {
+            try { aiAudioRecorder.discard() } catch (_: Exception) {}   // or the mic stays on
             isRecordingAI.value = false
             showStatus("⚠ Error: ${e.message}")
         }

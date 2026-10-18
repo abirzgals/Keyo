@@ -30,50 +30,36 @@ class OpenAppTool : Tool {
         val pm = context.packageManager
         // Tools run on Main; enumerating every launcher activity and loading each one's label is
         // a resource load from a foreign APK per app — hundreds of ms on a phone with 150 apps,
-        // on the IME's main thread. Do the matching on IO; only the launch needs Main.
+        // on the IME's main thread. So the whole match and launch run on IO.
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { match(context, pm, query) }
     }
 
-    private fun match(context: Context, pm: android.content.pm.PackageManager, query: String): ToolResult {
-        val launchables = getLaunchableApps(pm)
+    private fun match(context: Context, pm: PackageManager, query: String): ToolResult {
+        // Each label is loaded once: the passes below used to load all of them up to four times.
+        val apps = getLaunchableApps(pm).map { it to it.loadLabel(pm).toString() }
+        fun ResolveInfo.go() = launchApp(context, pm, this)
 
         // 1. Exact match on label
-        val exact = launchables.find {
-            it.loadLabel(pm).toString().lowercase() == query
-        }
-        if (exact != null) {
-            return launchApp(context, pm, exact)
-        }
+        apps.find { it.second.lowercase() == query }?.let { return it.first.go() }
 
         // 2. Contains match
-        val contains = launchables.filter {
-            it.loadLabel(pm).toString().lowercase().contains(query)
-        }
-        if (contains.size == 1) {
-            return launchApp(context, pm, contains[0])
-        }
+        val contains = apps.filter { it.second.lowercase().contains(query) }
+        if (contains.size == 1) return contains[0].first.go()
 
         // 3. Package name contains match
-        val pkgMatch = launchables.find {
-            it.activityInfo.packageName.lowercase().contains(query)
-        }
-        if (pkgMatch != null) {
-            return launchApp(context, pm, pkgMatch)
-        }
+        apps.find { it.first.activityInfo.packageName.lowercase().contains(query) }?.let { return it.first.go() }
 
         // 4. Fuzzy — try removing common suffixes/prefixes
         val simplified = query.replace("the app ", "").replace("app ", "").trim()
-        val fuzzy = launchables.filter {
-            val label = it.loadLabel(pm).toString().lowercase()
+        val fuzzy = apps.filter {
+            val label = it.second.lowercase()
             label.contains(simplified) || simplified.contains(label)
         }
-        if (fuzzy.size == 1) {
-            return launchApp(context, pm, fuzzy[0])
-        }
+        if (fuzzy.size == 1) return fuzzy[0].first.go()
 
         // Multiple matches — list them
         if (contains.size > 1) {
-            val names = contains.take(5).joinToString(", ") { it.loadLabel(pm).toString() }
+            val names = contains.take(5).joinToString(", ") { it.second }
             return ToolResult(false, "Multiple matches: $names. Please be more specific.")
         }
 
