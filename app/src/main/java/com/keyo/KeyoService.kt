@@ -609,8 +609,42 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         }
     }
 
+    // ---- Inline autofill (Android 11+): password-manager chips above the keys ----------------
+
+    /** The inflated chips of the current response; empty when the password manager offers none. */
+    private val inlineSuggestions = mutableStateOf<List<View>>(emptyList())
+    /** Bumped per response so a slow inflation from an older one cannot publish over a newer. */
+    private var inlineGen = 0
+
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.R)
+    override fun onCreateInlineSuggestionsRequest(uiExtras: android.os.Bundle): android.view.inputmethod.InlineSuggestionsRequest? =
+        try { InlineAutofill.request(this, currentTheme) }
+        catch (e: Exception) { android.util.Log.e("Keyo", "inline autofill request", e); null }
+
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.R)
+    override fun onInlineSuggestionsResponse(response: android.view.inputmethod.InlineSuggestionsResponse): Boolean {
+        val gen = ++inlineGen
+        val list = response.inlineSuggestions.sortedBy { it.info.isPinned }
+        if (list.isEmpty()) { inlineSuggestions.value = emptyList(); return true }
+        val size = android.util.Size(android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            (32 * resources.displayMetrics.density).toInt())
+        val views = arrayOfNulls<View>(list.size)
+        var left = list.size
+        fun done() { if (--left == 0 && gen == inlineGen) inlineSuggestions.value = views.filterNotNull() }
+        list.forEachIndexed { i, sugg ->
+            try {
+                sugg.inflate(this, size, mainExecutor) { v -> views[i] = v; done() }
+            } catch (e: Exception) {
+                android.util.Log.e("Keyo", "inline autofill inflate", e); done()
+            }
+        }
+        return true
+    }
+
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        inlineGen++
+        inlineSuggestions.value = emptyList()   // chips belong to the field that is going away
         // The field is going away: finalize any composing word in place (so it isn't silently dropped
         // or carried over) and clear transient editing state. onStartInputView re-initializes
         // everything when input resumes.
@@ -1268,6 +1302,28 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         }
     }
 
+    /** Password-manager chips (see [InlineAutofill]). Each is a view drawn by the password manager
+     *  in its own process; a tap goes to the system, never through the keyboard. Pinned chips (such
+     *  as Bitwarden's vault icon) were sorted to the end when the response arrived. */
+    @Composable
+    private fun InlineAutofillRow(views: List<View>) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            views.forEach { v ->
+                key(v) {
+                    androidx.compose.ui.viewinterop.AndroidView(factory = {
+                        // The same view comes back after the row was hidden (e.g. by a status line).
+                        (v.parent as? android.view.ViewGroup)?.removeView(v)
+                        v
+                    })
+                }
+            }
+        }
+    }
+
     // Dynamic top toolbar (Gboard-style): status text, a quick-paste chip, or action icons.
     @Composable
     private fun TopToolbar(textColor: Color, accentColor: Color) {
@@ -1280,6 +1336,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         val sugg by suggestions
         val primary by primarySuggestion
         val pinned by toolbarPinned
+        val autofill by inlineSuggestions
         Box(
             modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 4.dp),
             contentAlignment = Alignment.CenterStart
@@ -1295,6 +1352,9 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 // suggestions first hid the undo about 30ms after it appeared, whenever the result
                 // happened to end in a letter. The one truly destructive action needs its way back.
                 undo -> UndoRewriteBar(textColor, accentColor)
+                // A password manager's login chips outrank word suggestions, as in Gboard: on a
+                // login form they are what the user came for.
+                autofill.isNotEmpty() -> InlineAutofillRow(autofill)
                 // While typing (and the menu isn't pinned open) the row shows live suggestions.
                 sugg.isNotEmpty() && !pinned -> Row(
                     modifier = Modifier.fillMaxWidth(),

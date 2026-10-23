@@ -32,8 +32,8 @@ android {
         applicationId = "com.keyo"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.9.10"
+        versionCode = 21
+        versionName = "1.9.11"
 
         buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
     }
@@ -99,6 +99,8 @@ dependencies {
     implementation("androidx.savedstate:savedstate:1.3.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Styles the inline autofill chips (Bitwarden, Google Password Manager) above the keys.
+    implementation("androidx.autofill:autofill:1.3.0")
 
     // org.json is part of Android. This artifact exists ONLY so the JVM unit tests can run the
     // code that uses JSONArray/JSONObject; as `implementation` it was bundled into the APK, where

@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <input-method xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="com.keyo.SettingsActivity">
+    xmlns:tools="http://schemas.android.com/tools"
+    android:settingsActivity="com.keyo.SettingsActivity"
+    android:supportsInlineSuggestions="true"
+    tools:ignore="UnusedAttribute">
+    <!-- supportsInlineSuggestions: password managers may show their login chips above the keys
+         (Android 11+). See InlineAutofill. -->
     <!-- Three keyboard subtypes. On an en-US device only English is implicitly enabled; the user can
          enable Russian/Latvian in system keyboard settings to see them as separate keyboards (Gboard
          style). When the active subtype changes (here or from the system picker) the editor's spell
