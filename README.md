@@ -35,8 +35,10 @@ Typing works fully offline; the voice and AI features use the Groq API with your
 - **Cursor control** — swipe the space bar to move the caret; hold Shift first to select.
 - **Clipboard history** with pinned clips, and an **emoji panel** ordered by how often you use each.
 - **Compact mode** — a one-row keyboard for dictating, toggled by holding the bottom-left key.
-- **9 color themes** (Catppuccin, Dracula, Nord, Gruvbox, Solarized, Rosé Pine, Tokyo Night,
-  AMOLED, Light).
+- **11 color themes** (Gboard Dark and Light, Catppuccin, Dracula, Nord, Gruvbox, Solarized,
+  Rosé Pine, Tokyo Night, AMOLED, Light).
+- **Transparency effects** — an optional frosted-glass keyboard: translucent keys with a soft
+  contour glow over a blurred view of the app (blur on Android 12+ where the device supports it).
 - **Adjustable size** — key height, spacing and bottom offset sliders; optional number row.
 - **Configurable haptics** and optional key-press sound.
 - **Personal dictionary** — view, search, export and import the words Keyo has learned.

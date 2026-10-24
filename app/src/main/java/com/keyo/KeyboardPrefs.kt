@@ -10,6 +10,7 @@ object KeyboardPrefs {
     private const val KEY_AI_MODEL = "ai_assistant_model"
     private const val KEY_AUTOCORRECT = "autocorrect_enabled"
     private const val KEY_NUMBER_ROW = "number_row_enabled"
+    private const val KEY_TRANSPARENCY = "transparency_effects"
     private const val KEY_KEY_HEIGHT = "key_height"   // row height in dp
     private const val KEY_HGAP = "key_hgap"           // horizontal gap between keys, dp
     private const val KEY_VGAP = "key_vgap"           // vertical gap between rows, dp
@@ -85,6 +86,13 @@ object KeyboardPrefs {
 
     fun setDictationCleanup(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOCORRECT, enabled).apply()
+    }
+
+    /** "Transparency effects": the frosted-glass keyboard (see GlassStyle). Off by default. */
+    fun isTransparencyEffects(context: Context): Boolean = prefs(context).getBoolean(KEY_TRANSPARENCY, false)
+
+    fun setTransparencyEffects(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TRANSPARENCY, on).apply()
     }
 
     fun isNumberRowEnabled(context: Context): Boolean {
@@ -392,10 +400,24 @@ object KeyboardPrefs {
         val text: Long,
         val record: Long = 0xFFFF5555,
         val altPopupBg: Long = 0xFF45475A,
-        val altPopupKey: Long = 0xFF585B70
+        val altPopupKey: Long = 0xFF585B70,
+        /** Shift, Backspace, 123, globe, comma and period, when they differ from the letters (the
+         *  Gboard look). Null: they share the letter colour and 123/ABC wear the accent. */
+        val fnKey: Long? = null,
+        /** Glyphs drawn on the accent colour (Enter, an active Shift). */
+        val onAccent: Long = 0xFF000000
     )
 
     val THEMES = listOf(
+        // Gboard's own greys (Google's grey palette) with its blue Enter.
+        KeyboardTheme("gboard_dark", "Gboard Dark",
+            bg = 0xFF202124, key = 0xFF3C4043, accent = 0xFF8AB4F8, text = 0xFFE8EAED,
+            record = 0xFFF28B82, altPopupBg = 0xFF2D2E31, altPopupKey = 0xFF4A4E54,
+            fnKey = 0xFF4A4E54, onAccent = 0xFF202124),
+        KeyboardTheme("gboard_light", "Gboard Light",
+            bg = 0xFFE8EAED, key = 0xFFFFFFFF, accent = 0xFF1A73E8, text = 0xFF202124,
+            record = 0xFFD93025, altPopupBg = 0xFFF1F3F4, altPopupKey = 0xFFDADCE0,
+            fnKey = 0xFFCACDD2, onAccent = 0xFFFFFFFF),
         KeyboardTheme("catppuccin", "Catppuccin Mocha",
             bg = 0xFF1E1E2E, key = 0xFF313244, accent = 0xFFBB86FC, text = 0xFFCDD6F4),
         KeyboardTheme("dracula", "Dracula",

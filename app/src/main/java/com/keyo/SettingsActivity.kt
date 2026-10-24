@@ -343,6 +343,7 @@ class SettingsActivity : ComponentActivity() {
     private fun AppearanceScreen(onBack: () -> Unit) {
         var selectedTheme by remember { mutableStateOf(KeyboardPrefs.getTheme(this@SettingsActivity)) }
         var numberRow by remember { mutableStateOf(KeyboardPrefs.isNumberRowEnabled(this@SettingsActivity)) }
+        var glass by remember { mutableStateOf(KeyboardPrefs.isTransparencyEffects(this@SettingsActivity)) }
         var mini by remember { mutableStateOf(KeyboardPrefs.isMiniMode(this@SettingsActivity)) }
         var keyH by remember { mutableStateOf(KeyboardPrefs.getKeyHeight(this@SettingsActivity)) }
         var vGap by remember { mutableStateOf(KeyboardPrefs.getVGap(this@SettingsActivity)) }
@@ -354,6 +355,12 @@ class SettingsActivity : ComponentActivity() {
             SectionLabel("Color theme")
             ThemePicker(selectedTheme) {
                 selectedTheme = it; KeyboardPrefs.setTheme(this@SettingsActivity, it)
+            }
+            Spacer(Modifier.height(8.dp))
+            Group {
+                ToggleRow("Transparency effects", glassDescription(), glass) {
+                    glass = it; KeyboardPrefs.setTransparencyEffects(this@SettingsActivity, it)
+                }
             }
 
             SectionLabel("Layout")
@@ -839,6 +846,15 @@ class SettingsActivity : ComponentActivity() {
     }
 
     // ============================== Composite pieces ==============================
+
+    /** What the switch does, and whether this device can blur behind a window at all — without
+     *  that the glass is a tinted, translucent sheet only. */
+    private fun glassDescription(): String {
+        val base = "Frosted-glass keys over a blurred view of the app, with a soft glow and a springy press"
+        val canBlur = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+            getSystemService(android.view.WindowManager::class.java)?.isCrossWindowBlurEnabled == true
+        return if (canBlur) base else "$base. This device can't blur behind windows right now (or battery saver is on), so the keyboard stays a translucent tint"
+    }
 
     /** Groq API key editor (text field + Save/Test + helper links). Used on the Setup and Voice & AI screens. */
     @Composable

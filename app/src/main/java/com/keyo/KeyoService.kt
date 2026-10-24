@@ -323,6 +323,9 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         hapticStrength.value = KeyboardPrefs.getHapticStrength(this)
         soundEnabled.value = KeyboardPrefs.isSoundEnabled(this)
         themeId.value = KeyboardPrefs.getTheme(this)
+        val glassWas = transparency.value
+        transparency.value = KeyboardPrefs.isTransparencyEffects(this)
+        if (transparency.value != glassWas) applyWindowGlass()
         val langsBefore = enabledLangs.value
         enabledLangs.value = KeyboardPrefs.getEnabledLanguages(this)
         // If the user disabled the currently-active language in Settings, switch to a still-enabled
@@ -464,6 +467,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         super.onWindowShown()
         installLifecycleOwnerOnDecorView()
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+        applyWindowGlass()
     }
 
     override fun onCreateInputView(): View {
@@ -609,6 +613,48 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         }
     }
 
+    // ---- Transparency effects (frosted glass, see GlassStyle) -----------------------------------
+
+    /** The user's switch. */
+    private val transparency = mutableStateOf(false)
+    /** True while the window really blurs the app behind it — decides how opaque the sheet must be. */
+    private val blurring = mutableStateOf(false)
+    private var blurListener: java.util.function.Consumer<Boolean>? = null
+
+    /** A key's face in the current style; accent-coloured keys stay strong in glass. */
+    @Composable
+    private fun Modifier.face(color: Color, pressed: Boolean, strong: Boolean = false): Modifier {
+        val theme = currentTheme
+        return keyFace(color, pressed, transparency.value, Glass.isDark(Color(theme.bg)),
+            strong = strong || color == Color(theme.accent))
+    }
+
+    /**
+     * Blur the app behind the keyboard window (cross-window blur, Android 12+). Only while the
+     * window is the keyboard alone: should a device ever give the IME a full-screen window, the
+     * blur would cover the whole app, so then the sheet stays an unblurred tint. Also off whenever
+     * the system disables blur (battery saver, a device without the GPU budget).
+     */
+    private fun applyWindowGlass() {
+        val w = window?.window ?: return
+        if (transparency.value) w.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) { blurring.value = false; return }
+        val wm = getSystemService(android.view.WindowManager::class.java)
+        val keyboardOnly = w.attributes.height != android.view.WindowManager.LayoutParams.MATCH_PARENT
+        val on = transparency.value && keyboardOnly && wm?.isCrossWindowBlurEnabled == true
+        try {
+            w.setBackgroundBlurRadius(if (on) (Glass.BLUR_DP * resources.displayMetrics.density).toInt() else 0)
+            blurring.value = on
+        } catch (e: Exception) {
+            android.util.Log.e("Keyo", "window blur", e); blurring.value = false
+        }
+        if (blurListener == null && wm != null) {
+            val l = java.util.function.Consumer<Boolean> { applyWindowGlass() }
+            wm.addCrossWindowBlurEnabledListener(mainExecutor, l)
+            blurListener = l
+        }
+    }
+
     // ---- Inline autofill (Android 11+): password-manager chips above the keys ----------------
 
     /** The inflated chips of the current response; empty when the password manager offers none. */
@@ -692,6 +738,9 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
     override fun onDestroy() {
         KeyboardPrefs.unregisterChangeListener(this, prefListener)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) blurListener?.let {
+            getSystemService(android.view.WindowManager::class.java)?.removeCrossWindowBlurEnabledListener(it)
+        }
         clipboardManager?.removePrimaryClipChangedListener(clipListener)
         // Cancel pending delayed work and all launched coroutines so nothing fires after teardown.
         handler.removeCallbacksAndMessages(null)
@@ -768,6 +817,12 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         val accentColor = Color(theme.accent)
         val textColor = Color(theme.text)
         val recordColor = Color(theme.record)
+        // Gboard-style themes colour the function keys apart from the letters and give 123/ABC that
+        // grey too; the other themes keep one key colour and the accent 123 pill.
+        val fnColor = theme.fnKey?.let { Color(it) } ?: keyColor
+        val onAccent = Color(theme.onAccent)
+        val modeColor = if (theme.fnKey != null) fnColor else accentColor
+        val modeText = if (theme.fnKey != null) textColor else onAccent
 
         val cfg = androidx.compose.ui.platform.LocalConfiguration.current
         val short = shortScreen()
@@ -780,7 +835,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         // Gboard genuinely does span the full width (measured 862dp of 914), and capping it left the
         // keyboard a narrow block floating mid-screen.
         val wideScreen = cfg.screenWidthDp >= 600 && !short
-        Box(modifier = Modifier.fillMaxWidth().background(bgColor)) {
+        Box(modifier = Modifier.fillMaxWidth().keyboardSheet(bgColor, transparency.value, blurring.value)) {
         Column(
             modifier = Modifier
                 .then(if (wideScreen) Modifier.width(560.dp) else Modifier.fillMaxWidth())
@@ -850,7 +905,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 // like Gboard — the Shift key also arms select-by-space-swipe as usual.
                 MiniStatusLine(accentColor)
                 Row(modifier = Modifier.fillMaxWidth()) {
-                    ModeKey("123", keyColor, textColor, keyHeight, Modifier.weight(1.0f),
+                    ModeKey("123", fnColor, textColor, keyHeight, Modifier.weight(1.0f),
                         miniHint = "ABC",
                         onToggleMini = {
                             KeyboardPrefs.setMiniMode(this@KeyoService, false)
@@ -862,20 +917,20 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     ShiftKey(
                         active = shift || caps,
                         locked = caps,
-                        keyColor = keyColor,
+                        keyColor = fnColor,
                         accentColor = accentColor,
-                        iconColor = if (shift || caps) Color.Black else textColor,
+                        iconColor = if (shift || caps) onAccent else textColor,
                         height = keyHeight,
                         modifier = Modifier.weight(1.0f)
                     ) { onShiftTap() }
                     SpaceKey(Modifier.weight(2.9f), lang.uppercase(), keyColor, textColor, accentColor, recordColor)
-                    BackspaceKey(keyColor, textColor, Modifier.weight(1.2f))
+                    BackspaceKey(fnColor, textColor, Modifier.weight(1.2f))
                     // ONE Enter. A line break is Shift+Enter, exactly as in the full keyboard and in
                     // Gboard — the Shift key is right there, so a second dedicated ⏎ was two keys
                     // doing the same thing in every field that has no Send action.
                     val imeOptions by fieldImeOptions
                     val enterKind = EnterBehavior.labelKind(imeOptions, symbolMode = false)
-                    EnterKey(enterKind, accentColor, Color.Black, keyHeight, Modifier.weight(1.3f)) {
+                    EnterKey(enterKind, accentColor, onAccent, keyHeight, Modifier.weight(1.3f)) {
                         handleEnter()   // Shift+Enter forces a newline
                     }
                 }
@@ -1041,9 +1096,9 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                                         ShiftKey(
                                             active = shift || caps,
                                             locked = caps,
-                                            keyColor = keyColor,
+                                            keyColor = fnColor,
                                             accentColor = accentColor,
-                                            iconColor = if (shift || caps) Color.Black else textColor,
+                                            iconColor = if (shift || caps) onAccent else textColor,
                                             height = keyHeight,
                                             modifier = Modifier.weight(side)
                                         ) { onShiftTap() }
@@ -1064,7 +1119,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                                             if (shift && !caps) { isShift.value = false; shiftIsAuto = false }
                                         }
                                     }
-                                    if (lastRow) BackspaceKey(keyColor, textColor, Modifier.weight(side))
+                                    if (lastRow) BackspaceKey(fnColor, textColor, Modifier.weight(side))
                                 }
                             }
                         }
@@ -1103,7 +1158,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         listOf("*","\"","'",":",";","!","?").forEach { s ->
                             KeyButton(s, keyColor, textColor, Modifier.weight(1f)) { commitText(s) }
                         }
-                        BackspaceKey(keyColor, textColor, Modifier.weight(1.3f))
+                        BackspaceKey(fnColor, textColor, Modifier.weight(1.3f))
                     }
                 }
                 "symbols" -> {
@@ -1130,7 +1185,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         listOf("°","•","○","●","□","■","♥","♦").forEach { s ->
                             KeyButton(s, keyColor, textColor, Modifier.weight(1f)) { commitText(s) }
                         }
-                        BackspaceKey(keyColor, textColor, Modifier.weight(1.3f))
+                        BackspaceKey(fnColor, textColor, Modifier.weight(1.3f))
                     }
                 }
                 "numpad" -> {
@@ -1158,7 +1213,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                             when (i) {
                                 0 -> KeyButton("-", keyColor, textColor, Modifier.weight(1f)) { commitText("-") }
                                 1 -> KeyButton("+", keyColor, textColor, Modifier.weight(1f)) { commitText("+") }
-                                2 -> BackspaceKey(keyColor, textColor, Modifier.weight(1f))
+                                2 -> BackspaceKey(fnColor, textColor, Modifier.weight(1f))
                                 3 -> KeyButton(".", keyColor, textColor, Modifier.weight(1f)) { commitChar('.') }
                             }
                         }
@@ -1207,7 +1262,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 // Mode / lang toggle button (bottom-left)
                 when (mode) {
                     "abc" -> {
-                        ModeKey("123", accentColor, Color.Black, keyHeight, Modifier.weight(1.2f),
+                        ModeKey("123", modeColor, modeText, keyHeight, Modifier.weight(1.2f),
                             miniHint = "mini",
                             onToggleMini = {
                                 KeyboardPrefs.setMiniMode(this@KeyoService, true)   // sticky until left
@@ -1221,7 +1276,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         // Also a ModeKey: holding the bottom-left key must reach mini from EVERY
                         // page, not just the letters. Number and phone fields open straight into
                         // numpad/123, so that is exactly where a user follows the "hold 123" hint.
-                        ModeKey("ABC", accentColor, Color.Black, keyHeight, Modifier.weight(1.2f),
+                        ModeKey("ABC", modeColor, modeText, keyHeight, Modifier.weight(1.2f),
                             miniHint = if (KeyboardPrefs.isMiniMode(this@KeyoService)) "ABC" else "mini",
                             onToggleMini = {
                                 val on = !KeyboardPrefs.isMiniMode(this@KeyoService)
@@ -1233,27 +1288,27 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 }
 
                 // Comma — long press starts AI assistant (🤖)
-                CommaAiKey(keyColor, textColor, keyHeight, Modifier.weight(0.9f))
+                CommaAiKey(fnColor, textColor, keyHeight, Modifier.weight(0.9f))
 
                 // Right of the comma: globe = switch language (abc); mode hint otherwise
                 when (mode) {
                     "abc" -> {
-                        LanguageKey(keyColor, textColor, keyHeight, Modifier.weight(1f)) {
+                        LanguageKey(fnColor, textColor, keyHeight, Modifier.weight(1f)) {
                             cycleLanguage()
                         }
                     }
                     "123" -> {
-                        KeyButton("!?#", keyColor, textColor, Modifier.weight(1f), fontSize = modeKeyFont()) {
+                        KeyButton("!?#", fnColor, textColor, Modifier.weight(1f), fontSize = modeKeyFont()) {
                             keyboardMode.value = "symbols"
                         }
                     }
                     "symbols" -> {
-                        KeyButton("🔢", keyColor, textColor, Modifier.weight(1f), fontSize = modeKeyFont()) {
+                        KeyButton("🔢", fnColor, textColor, Modifier.weight(1f), fontSize = modeKeyFont()) {
                             keyboardMode.value = "numpad"
                         }
                     }
                     "numpad" -> {
-                        KeyButton("123", keyColor, textColor, Modifier.weight(1f), fontSize = modeKeyFont()) {
+                        KeyButton("123", fnColor, textColor, Modifier.weight(1f), fontSize = modeKeyFont()) {
                             keyboardMode.value = "123"
                         }
                     }
@@ -1266,7 +1321,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 SpaceKey(Modifier.weight(3.5f), spaceLabel, keyColor, textColor, accentColor, recordColor)
 
                 // Period — long press shows ? , ! -
-                KeyButton(".", keyColor, textColor, Modifier.weight(0.9f)) { commitChar('.') }
+                KeyButton(".", fnColor, textColor, Modifier.weight(0.9f)) { commitChar('.') }
 
                 // Enter / Submit — Gboard-style: a real Enter (newline) by default, an action
                 // icon only when the field explicitly asks for one (search/send/go/next).
@@ -1274,7 +1329,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 val inSymbols = mode == "123" || mode == "symbols" || mode == "numpad"
                 val enterKind = EnterBehavior.labelKind(imeOptions, symbolMode = inSymbols)
 
-                EnterKey(enterKind, accentColor, Color.Black, keyHeight, Modifier.weight(1.0f)) {
+                EnterKey(enterKind, accentColor, onAccent, keyHeight, Modifier.weight(1.0f)) {
                     handleEnter()   // Shift+Enter forces a newline (Gboard)
                 }
             }
@@ -1736,14 +1791,14 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     }
                 }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(
+                .face(
                     when {
                         recording && micDragX < -cancelThreshold -> Color(0xFF666666)
                         recording -> recordColor
-                        spacePressed -> lerp(keyColor, Color.Black, 0.22f)
                         else -> keyColor
                     },
-                    RoundedCornerShape(6.dp)
+                    pressed = spacePressed && !recording,
+                    strong = recording
                 ),
             contentAlignment = Alignment.Center
         ) {
@@ -1868,15 +1923,18 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         textColor: Color,
         accentColor: Color
     ) {
+        val theme = currentTheme
+        val fnColor = theme.fnKey?.let { Color(it) } ?: keyColor
         androidx.compose.material3.HorizontalDivider(color = textColor.copy(alpha = 0.12f))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            KeyButton("ABC", accentColor, Color.Black, Modifier.weight(1.4f), fontSize = modeKeyFont()) { keyboardMode.value = letterMode() }
+            KeyButton("ABC", if (theme.fnKey != null) fnColor else accentColor,
+                if (theme.fnKey != null) textColor else Color(theme.onAccent), Modifier.weight(1.4f), fontSize = modeKeyFont()) { keyboardMode.value = letterMode() }
             SpaceKey(Modifier.weight(4f), "space", keyColor, textColor, accentColor, Color(currentTheme.record))
-            BackspaceKey(keyColor, textColor, Modifier.weight(1.4f))
+            BackspaceKey(fnColor, textColor, Modifier.weight(1.4f))
         }
     }
 
@@ -1928,7 +1986,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     }
                 }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(if (pressed) lerp(bgColor, Color.Black, 0.22f) else bgColor, RoundedCornerShape(6.dp)),
+                .face(bgColor, pressed),
             contentAlignment = Alignment.Center
         ) {
             EnterGlyph(kind, iconColor, Modifier.size(22.dp))
@@ -1988,7 +2046,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     }
                 }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(if (pressed) lerp(bgColor, Color.Black, 0.22f) else bgColor, RoundedCornerShape(6.dp)),
+                .face(bgColor, pressed),
             contentAlignment = Alignment.Center
         ) {
             Text(label, color = textColor, fontSize = modeKeyFont(), textAlign = TextAlign.Center)
@@ -2045,7 +2103,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 .semantics { contentDescription = "Switch language" }
                 .clickable(interactionSource = interaction, indication = null) { performKeyFeedback(); onClick() }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(if (pressed) lerp(keyColor, Color.Black, 0.22f) else keyColor, RoundedCornerShape(6.dp)),
+                .face(keyColor, pressed),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.size(20.dp)) {
@@ -2108,7 +2166,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     }
                 }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(if (pressed) lerp(base, Color.Black, 0.22f) else base, RoundedCornerShape(6.dp)),
+                .face(base, pressed),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.size(width = 24.dp, height = 22.dp)) {
@@ -2210,13 +2268,10 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     }
                 }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(
-                    when {
-                        swipedClear -> Color(0xFFFF5555)
-                        isPressed -> lerp(bgColor, Color.Black, 0.22f)
-                        else -> bgColor
-                    },
-                    RoundedCornerShape(6.dp)
+                .face(
+                    if (swipedClear) Color(0xFFFF5555) else bgColor,
+                    pressed = isPressed && !swipedClear,
+                    strong = swipedClear
                 ),
             contentAlignment = Alignment.Center
         ) {
@@ -2562,7 +2617,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                             onBounds?.invoke(b)
                         }
                     }
-                    .background(if (pressed) lerp(bgColor, Color.Black, 0.22f) else bgColor, RoundedCornerShape(6.dp)),
+                    .face(bgColor, pressed),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -2603,7 +2658,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 ) {
                     Row(
                         modifier = Modifier
-                            .background(Color(currentTheme.altPopupBg), RoundedCornerShape(8.dp))
+                            .popupFace(Color(currentTheme.altPopupBg), transparency.value, Glass.isDark(Color(currentTheme.bg)))
                             .padding(horizontal = 4.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.Center
                     ) {
@@ -2753,14 +2808,14 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     }
                 }
                 .padding(horizontal = keyHGapDp.intValue.dp, vertical = gapV())
-                .background(
+                .face(
                     when {
                         recordingAI && aiDragX < -cancelThreshold -> Color(0xFF666666)
                         recordingAI -> Color(0xFF50FA7B)
-                        aiPressed -> lerp(keyColor, Color.Black, 0.22f)
                         else -> keyColor
                     },
-                    RoundedCornerShape(6.dp)
+                    pressed = aiPressed && !recordingAI,
+                    strong = recordingAI
                 ),
             contentAlignment = Alignment.Center
         ) {
@@ -2809,7 +2864,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 }
                 .graphicsLayer { alpha = if (preview != null) 1f else 0f }
                 .size(48.dp)
-                .background(bg, RoundedCornerShape(8.dp)),
+                .popupFace(bg, transparency.value, Glass.isDark(Color(currentTheme.bg))),
             contentAlignment = Alignment.Center
         ) {
             Text(preview?.first ?: "", color = fg, fontSize = 28.sp,
