@@ -116,7 +116,7 @@ class SettingsActivity : ComponentActivity() {
     private val updateRecheckMs = 6L * 60 * 60 * 1000
 
     /**
-     * Asks GitHub for a newer release as soon as the app opens, so a side-loaded build announces
+     * Asks the update server for a newer release as soon as the app opens, so a side-loaded build announces
      * itself instead of waiting for someone to go digging in About.
      *
      * The throttle deliberately covers only the quiet answers: a check that found nothing is not
@@ -444,6 +444,8 @@ class SettingsActivity : ComponentActivity() {
         var instantDictation by remember { mutableStateOf(KeyboardPrefs.isInstantDictation(this@SettingsActivity)) }
 
         SubScreen("Voice & AI", onBack) {
+            SectionLabel("On-device recognition (Russian)")
+            LocalSttGroup()
             SectionLabel("Models")
             // Named for what they drive: `model` runs dictation cleanup AND every ✨ rewrite;
             // `aiModel` only the hold-to-speak assistant. The old labels had Rewrite under the
@@ -685,7 +687,7 @@ class SettingsActivity : ComponentActivity() {
         }
     }
 
-    /** Checks GitHub for a newer release and, if the user wants it, downloads and installs it.
+    /** Checks the update server for a newer release and, if the user wants it, downloads and installs it.
      *  Keyo is side-loaded, so without this there is nothing to tell anyone an update exists. */
     private fun tryInstall(file: java.io.File) {
         installApk(file,
@@ -919,6 +921,70 @@ class SettingsActivity : ComponentActivity() {
                 )
                 Text("Get a free key at console.groq.com/keys ↗", fontSize = 12.sp, color = accent,
                     modifier = Modifier.padding(top = 2.dp).clickable { openUrl("https://console.groq.com/keys") })
+            }
+        }
+    }
+
+    /** Download and control of the GigaAM model, and the recordings still waiting for text. */
+    @Composable
+    private fun LocalSttGroup() {
+        var installed by remember { mutableStateOf(LocalStt.isInstalled(this@SettingsActivity)) }
+        var alwaysLocal by remember { mutableStateOf(KeyboardPrefs.isAlwaysLocalStt(this@SettingsActivity)) }
+        var saved by remember { mutableStateOf(SavedDictations.pending(this@SettingsActivity).size) }
+        val progress by LocalSttDownload.progress
+        val failure by LocalSttDownload.error
+        val downloading = progress >= 0
+        LaunchedEffect(downloading) { installed = LocalStt.isInstalled(this@SettingsActivity) }
+        Group {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    if (installed) "GigaAM v3 is ready. Russian dictation works without internet."
+                    else "Downloads GigaAM v3 once (${LocalStt.totalBytes / 1_000_000} MB, Wi-Fi recommended). " +
+                        "After that, Russian dictation works without internet.",
+                    fontSize = 13.sp, color = textPrimary
+                )
+                failure?.let {
+                    Text("Download stopped: $it", fontSize = 12.sp, color = textMuted, modifier = Modifier.padding(top = 6.dp))
+                }
+                Spacer(Modifier.height(10.dp))
+                when {
+                    downloading -> Text("Downloading… $progress%", color = textMuted, fontSize = 13.sp)
+                    installed -> OutlinedButton(
+                        onClick = { LocalStt.deleteModel(this@SettingsActivity); installed = false },
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, border)
+                    ) { Text("Delete model", color = textPrimary) }
+                    else -> Button(
+                        onClick = { LocalSttDownload.start(applicationContext) },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = accent)
+                    ) { Text("Download model", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                }
+            }
+            if (installed) {
+                Sep()
+                ToggleRow("Always on device", "Never send Russian dictation to Groq", alwaysLocal) {
+                    alwaysLocal = it; KeyboardPrefs.setAlwaysLocalStt(this@SettingsActivity, it)
+                }
+            }
+            if (saved > 0) {
+                Sep()
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Saved recordings: $saved. They are recognised automatically when the keyboard next opens, " +
+                            "and the text appears in clipboard history. Kept for 7 days.",
+                        fontSize = 13.sp, color = textPrimary
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            SavedDictations.pending(this@SettingsActivity).forEach { it.delete() }
+                            saved = 0
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, border)
+                    ) { Text("Delete saved recordings", color = textPrimary) }
+                }
             }
         }
     }
@@ -1307,6 +1373,26 @@ class SettingsActivity : ComponentActivity() {
                 color = if (selected) Color.White else textMuted,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
         }
+    }
+}
+
+/** Lives outside the activity, so leaving Settings neither stops the download nor starts a second one. */
+private object LocalSttDownload {
+    val progress = mutableIntStateOf(-1)
+    val error = mutableStateOf<String?>(null)
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+    fun start(context: android.content.Context) {
+        if (progress.intValue >= 0) return
+        progress.intValue = 0
+        error.value = null
+        Thread({
+            val problem = LocalStt.download(context) { p -> main.post { progress.intValue = p } }
+            main.post {
+                error.value = problem
+                progress.intValue = -1
+            }
+        }, "keyo-model-download").start()
     }
 }
 

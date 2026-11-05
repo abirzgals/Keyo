@@ -61,6 +61,10 @@ object KeyboardPrefs {
     fun unregisterChangeListener(context: Context, l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) =
         prefs(context).unregisterOnSharedPreferenceChangeListener(l)
 
+    /** Recognise Russian dictation on the device even when the cloud is reachable. */
+    fun isAlwaysLocalStt(context: Context) = prefs(context).getBoolean("always_local_stt", false)
+    fun setAlwaysLocalStt(context: Context, v: Boolean) = prefs(context).edit().putBoolean("always_local_stt", v).apply()
+
     /** Model for dictation cleanup and Rewrite. */
     fun getTextModel(context: Context): String {
         return prefs(context).getString(KEY_MODEL, GroqApi.DEFAULT_TEXT_MODEL) ?: GroqApi.DEFAULT_TEXT_MODEL

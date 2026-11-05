@@ -70,6 +70,11 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     // keeps working offline (on-device recognition with downloaded language packs).
     private val offlineDictation by lazy { OfflineDictation(this) }
     private var offlineSession = false
+    // The spool of the dictation being recorded, and recordings something is already working on.
+    private var currentSpool: File? = null
+    private val recoveryBusy = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<File, Boolean>())
+    private var recovering = false
+    private var lastRecoveryMs = 0L
     // One lifecycle-scoped coroutine scope for the whole service. Cancelled in onDestroy() so no
     // launched job (long-press timers, AI/voice callbacks) can outlive the keyboard and touch
     // destroyed Compose state.
@@ -533,6 +538,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         secureField = isPassword              // blocks voice/AI/suggestions/composing (passwords only)
         noLearn = isPassword || noLearning    // blocks personal persistence (also incognito)
         fieldInputType = inputType
+        recoverSavedDictations()
         // Fields where Gboard also turns smart typing off: email / URI / filter text variations,
         // explicit TYPE_TEXT_FLAG_NO_SUGGESTIONS, and non-text classes (number/phone/datetime/null).
         val varNoSug = cls == android.text.InputType.TYPE_CLASS_TEXT && (
@@ -4483,7 +4489,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
             // No Groq key / no network -> fall back to the device's own speech recognition, so
             // dictation still works. Interim text streams into the composing region.
-            if ((GroqApi.apiKey.isBlank() || !networkAvailable()) && offlineDictation.isAvailable()) {
+            if ((GroqApi.apiKey.isBlank() || !networkAvailable()) && !localSttUsable() && offlineDictation.isAvailable()) {
                 finalizeComposing()
                 offlineSession = true
                 isRecording.value = true
@@ -4526,7 +4532,9 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 return
             }
 
-            if (audioRecorder.start()) {
+            val spool = SavedDictations.newSpool(this, currentLang.value)
+            if (audioRecorder.start(spool)) {
+                currentSpool = spool
                 isRecording.value = true
                 statusText.value = "🎤 Recording…"
             } else {
@@ -4560,6 +4568,211 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         else showStatus("✕ Cancelled", 1500)
     }
 
+    // ---- Dictation: cloud first, then the on-device model, and the recording is kept until one works ----
+
+    /** GigaAM only understands Russian, so on other keyboards it must not guess. */
+    private fun localSttUsable() = currentLang.value == "ru" && LocalStt.isInstalled(this)
+
+    private fun recognizeDictation(audio: File, token: String) {
+        val local = localSttUsable()
+        val cloud = GroqApi.apiKey.isNotBlank() && networkAvailable()
+        if (local && (!cloud || KeyboardPrefs.isAlwaysLocalStt(this))) {
+            recognizeLocally(audio, token)
+            return
+        }
+        if (!cloud) {
+            showSavedDictation()
+            return
+        }
+        statusText.value = "⏳ Transcribing…"
+        recoveryBusy.add(audio)
+        // A connected but useless network never reports an error in time: after this long the
+        // device takes over from the same recording. Whichever side settles first wins.
+        val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val takeOver = Runnable {
+            if (settled.compareAndSet(false, true)) recognizeLocally(audio, token)
+        }
+        if (local) handler.postDelayed(takeOver, 8_000L + SavedDictations.seconds(audio) * 300L)
+        GroqApi.transcribe(audio, dictationLangs(), whisperLangOf(currentLang.value), dictationVocabulary()) { text, error ->
+            handler.removeCallbacks(takeOver)
+            if (settled.compareAndSet(false, true)) {
+                if (text != null) {
+                    audio.delete()
+                    recoveryBusy.remove(audio)
+                    deliverCloudText(text, token)
+                } else handler.post {
+                    if (local) recognizeLocally(audio, token)
+                    else {
+                        recoveryBusy.remove(audio)
+                        showSavedDictation(error)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun recognizeLocally(audio: File, token: String) {
+        statusText.value = "⏳ Recognizing on device…"
+        recoveryBusy.add(audio)
+        serviceScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            val text = try {
+                LocalStt.transcribe(this@KeyoService, audio)
+            } catch (t: Throwable) {
+                android.util.Log.e("Keyo", "on-device recognition failed", t)
+                null
+            }
+            handler.post {
+                recoveryBusy.remove(audio)
+                when {
+                    text == null -> showSavedDictation("on-device recognition failed")
+                    text.isBlank() -> { audio.delete(); showStatus("Didn't catch that", 2000) }
+                    else -> {
+                        audio.delete()
+                        try {
+                            if (canCommitTo(token)) {
+                                finalizeComposing()
+                                markSelfEdit()
+                                currentInputConnection?.commitText(text, 1)
+                                statusText.value = ""
+                            } else keepDroppedText(text)
+                        } catch (_: Exception) { keepDroppedText(text) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showSavedDictation(reason: String? = null) {
+        showStatus(if (reason != null) "💾 Saved, will retry ($reason)" else "💾 Saved, will retry when possible", 4000)
+    }
+
+    /** The text exists but its field is gone. It goes to the clipboard panel rather than away. */
+    private fun keepDroppedText(text: String) {
+        KeyboardPrefs.addClip(this, text)
+        clipHistory.value = KeyboardPrefs.getClipHistory(this)
+        showStatus("🎤 Field changed — text is in clipboard history", 3500)
+    }
+
+    /**
+     * Works through recordings that never became text, one at a time, whenever a keyboard opens.
+     * The original field is long gone, so the text lands in clipboard history. Password and
+     * incognito fields are skipped so nothing is written to the history from them.
+     */
+    private fun recoverSavedDictations() {
+        val now = System.currentTimeMillis()
+        if (recovering || noLearn || now - lastRecoveryMs < 60_000L) return
+        lastRecoveryMs = now
+        recovering = true
+        serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            SavedDictations.housekeeping(this@KeyoService, audioRecorder.activeSpool())
+            handler.post { recoverNext() }
+        }
+    }
+
+    private fun recoverNext() {
+        val file = SavedDictations.pending(this).firstOrNull { it !in recoveryBusy }
+        val lang = file?.let { SavedDictations.languageOf(it) }
+        val useLocal = lang == "ru" && LocalStt.isInstalled(this)
+        if (file == null || (!useLocal && (GroqApi.apiKey.isBlank() || !networkAvailable()))) {
+            recovering = false
+            return
+        }
+        recoveryBusy.add(file)
+        val done: (String?) -> Unit = { text ->
+            handler.post {
+                recoveryBusy.remove(file)
+                if (text == null) {
+                    recovering = false   // the next keyboard opening tries again
+                } else {
+                    if (text.isNotBlank()) {
+                        KeyboardPrefs.addClip(this, text)
+                        clipHistory.value = KeyboardPrefs.getClipHistory(this)
+                        showStatus("🎤 Recovered a saved dictation — see clipboard history", 4000)
+                    }
+                    file.delete()
+                    recoverNext()
+                }
+            }
+        }
+        if (useLocal) serviceScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            done(try { LocalStt.transcribe(this@KeyoService, file) } catch (_: Throwable) { null })
+        } else {
+            GroqApi.transcribe(file, listOfNotNull(lang), lang, null) { text, _ -> done(text) }
+        }
+    }
+
+    private fun deliverCloudText(text: String, token: String) {
+            val cleanup = KeyboardPrefs.isDictationCleanup(this@KeyoService)
+            // No instant swap in raw key-event fields: the later delete-and-retype would
+            // replay as a burst of Backspace+typing on the remote machine (phantom hotkeys).
+            val instant = KeyboardPrefs.isInstantDictation(this@KeyoService) && !rawKeyField()
+            if (cleanup && instant) {
+                // Instant dictation: COMMIT the raw transcription right away (text appears
+                // after one round-trip). NOT a composing span — a composing span would be
+                // silently replaced by the user's next keystroke/backspace, destroying the
+                // whole dictation. When the cleaned version arrives, swap it in ONLY if the
+                // raw text is still untouched right before the cursor; any edit the user
+                // made meanwhile (or a switch to another field) wins and the cleanup result
+                // is dropped.
+                handler.post {
+                    try {
+                        if (canCommitTo(token)) {
+                            finalizeComposing()   // never over the word being typed
+                            markSelfEdit()
+                            currentInputConnection?.commitText(text, 1)
+                            statusText.value = "🧹 Cleaning up…"
+                        } else keepDroppedText(text)
+                    } catch (_: Exception) {}
+                }
+                GroqApi.cleanupText(text) { cleaned, _ ->
+                    handler.post {
+                        try {
+                            if (cleaned != null && cleaned != text && canCommitTo(token)) {
+                                val c = currentInputConnection
+                                if (c?.getTextBeforeCursor(text.length, 0)?.toString() == text) {
+                                    c.beginBatchEdit()
+                                    try {
+                                        c.deleteSurroundingText(text.length, 0)
+                                        c.commitText(cleaned, 1)
+                                    } finally { c.endBatchEdit() }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                        statusText.value = ""
+                    }
+                }
+            } else if (cleanup) {
+                handler.post { statusText.value = "🧹 Cleaning up…" }
+                GroqApi.cleanupText(text) { cleaned, _ ->
+                    handler.post {
+                        try {
+                            if (canCommitTo(token)) {
+                                finalizeComposing()   // never over the word being typed
+                                markSelfEdit()
+                                currentInputConnection?.commitText(cleaned ?: text, 1)
+                                statusText.value = ""
+                            } else keepDroppedText(cleaned ?: text)
+                        } catch (e: Exception) {
+                            showStatus("⚠ ${e.message}")
+                        }
+                    }
+                }
+            } else {
+                handler.post {
+                    try {
+                        if (canCommitTo(token)) {
+                            finalizeComposing()   // never over the word being typed
+                            markSelfEdit()
+                            currentInputConnection?.commitText(text, 1)
+                            statusText.value = ""
+                        } else keepDroppedText(text)
+                    } catch (e: Exception) {
+                        showStatus("⚠ ${e.message}")
+                    }
+                }
+            }
+    }
+
     private fun stopVoiceRecording() {
         try {
             if (offlineSession) {
@@ -4571,97 +4784,14 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
             if (!audioRecorder.isActive()) return
             finalizeComposing()   // commit any composing word so the transcript appends after it
 
-            // A fresh file per recording. With one fixed path, a transcription retried for its
-            // language could upload — and commit — the NEXT dictation's audio, or find the file
-            // already deleted by the previous callback.
-            val audioFile = File.createTempFile("voice_", ".wav", cacheDir)
+            // The recording lives in SavedDictations until its text has been delivered: a failed
+            // request or a dead network must never cost the user what they said.
+            val audioFile = currentSpool?.let { SavedDictations.wavFor(it) }
+                ?: File.createTempFile("voice_", ".wav", SavedDictations.dir(this))
+            currentSpool = null
             if (audioRecorder.stop(audioFile)) {
                 isRecording.value = false
-                statusText.value = "⏳ Transcribing…"
-                val token = fieldToken()
-
-                GroqApi.transcribe(audioFile, dictationLangs(), whisperLangOf(currentLang.value), dictationVocabulary()) { text, error ->
-                    audioFile.delete()   // don't leave the recorded speech sitting in the cache
-                    if (text != null) {
-                        val cleanup = KeyboardPrefs.isDictationCleanup(this@KeyoService)
-                        // No instant swap in raw key-event fields: the later delete-and-retype would
-                        // replay as a burst of Backspace+typing on the remote machine (phantom hotkeys).
-                        val instant = KeyboardPrefs.isInstantDictation(this@KeyoService) && !rawKeyField()
-                        if (cleanup && instant) {
-                            // Instant dictation: COMMIT the raw transcription right away (text appears
-                            // after one round-trip). NOT a composing span — a composing span would be
-                            // silently replaced by the user's next keystroke/backspace, destroying the
-                            // whole dictation. When the cleaned version arrives, swap it in ONLY if the
-                            // raw text is still untouched right before the cursor; any edit the user
-                            // made meanwhile (or a switch to another field) wins and the cleanup result
-                            // is dropped.
-                            handler.post {
-                                try {
-                                    if (canCommitTo(token)) {
-                                        finalizeComposing()   // never over the word being typed
-                                        markSelfEdit()
-                                        currentInputConnection?.commitText(text, 1)
-                                        statusText.value = "🧹 Cleaning up…"
-                                    } else showDroppedDictation()
-                                } catch (_: Exception) {}
-                            }
-                            GroqApi.cleanupText(text) { cleaned, _ ->
-                                handler.post {
-                                    try {
-                                        if (cleaned != null && cleaned != text && canCommitTo(token)) {
-                                            val c = currentInputConnection
-                                            if (c?.getTextBeforeCursor(text.length, 0)?.toString() == text) {
-                                                c.beginBatchEdit()
-                                                try {
-                                                    c.deleteSurroundingText(text.length, 0)
-                                                    c.commitText(cleaned, 1)
-                                                } finally { c.endBatchEdit() }
-                                            }
-                                        }
-                                    } catch (_: Exception) {}
-                                    statusText.value = ""
-                                }
-                            }
-                        } else if (cleanup) {
-                            handler.post { statusText.value = "🧹 Cleaning up…" }
-                            GroqApi.cleanupText(text) { cleaned, _ ->
-                                handler.post {
-                                    try {
-                                        if (canCommitTo(token)) {
-                                            finalizeComposing()   // never over the word being typed
-                                            markSelfEdit()
-                                            currentInputConnection?.commitText(cleaned ?: text, 1)
-                                            statusText.value = ""
-                                        } else showDroppedDictation()
-                                    } catch (e: Exception) {
-                                        showStatus("⚠ ${e.message}")
-                                    }
-                                }
-                            }
-                        } else {
-                            handler.post {
-                                try {
-                                    if (canCommitTo(token)) {
-                                        finalizeComposing()   // never over the word being typed
-                                        markSelfEdit()
-                                        currentInputConnection?.commitText(text, 1)
-                                        statusText.value = ""
-                                    } else showDroppedDictation()
-                                } catch (e: Exception) {
-                                    showStatus("⚠ ${e.message}")
-                                }
-                            }
-                        }
-                    } else {
-                        handler.post {
-                            // Nothing to commit, and nothing to release either: this path never
-                            // opened a composing region, so a finishComposingText() here could only
-                            // ever close the USER's — the word they were typing while the request
-                            // ran — after which the next letter re-inserted it ("helhell").
-                            showStatus(error ?: "Transcription failed", 3000)
-                        }
-                    }
-                }
+                recognizeDictation(audioFile, fieldToken())
             } else {
                 audioFile.delete()
                 try { currentInputConnection?.finishComposingText() } catch (_: Exception) {}
