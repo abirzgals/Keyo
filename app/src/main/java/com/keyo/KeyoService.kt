@@ -367,6 +367,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         autocorrectTypingOn = KeyboardPrefs.isAutocorrectTyping(this)
         swipeTypingOn = KeyboardPrefs.isSwipeTyping(this)
         fieldDiagOn.value = KeyboardPrefs.isFieldDiagnostics(this)
+        spaceLangSwipePref.value = KeyboardPrefs.isSpaceLanguageSwipe(this)
     }
 
     // Content rows the key area reserves. Fixed within a configuration so the keyboard never jumps
@@ -929,7 +930,8 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         height = keyHeight,
                         modifier = Modifier.weight(1.0f)
                     ) { onShiftTap() }
-                    SpaceKey(Modifier.weight(2.9f), lang.uppercase(), keyColor, textColor, accentColor, recordColor)
+                    SpaceKey(Modifier.weight(2.9f), lang.uppercase(), keyColor, textColor, accentColor, recordColor,
+                        languageSwipe = languageSwipeActive())
                     BackspaceKey(fnColor, textColor, Modifier.weight(1.2f))
                     // ONE Enter. A line break is Shift+Enter, exactly as in the full keyboard and in
                     // Gboard — the Shift key is right there, so a second dedicated ⏎ was two keys
@@ -1299,8 +1301,11 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 // Right of the comma: globe = switch language (abc); mode hint otherwise
                 when (mode) {
                     "abc" -> {
-                        LanguageKey(fnColor, textColor, keyHeight, Modifier.weight(1f)) {
-                            cycleLanguage()
+                        // Swiping the space bar replaces this key; its width goes to the space bar.
+                        if (!languageSwipeActive()) {
+                            LanguageKey(fnColor, textColor, keyHeight, Modifier.weight(1f)) {
+                                cycleLanguage()
+                            }
                         }
                     }
                     "123" -> {
@@ -1324,7 +1329,10 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                 // The label names the CURRENT language ("EN"/"LV"/"RU") — each language is its own
                 // keyboard with its own dictionary now.
                 val spaceLabel = if (mode == "abc") lang.uppercase() else "space"
-                SpaceKey(Modifier.weight(3.5f), spaceLabel, keyColor, textColor, accentColor, recordColor)
+                // Only on the letters: the 123 pages still scrub the cursor, so it stays reachable.
+                val swipeLanguage = mode == "abc" && languageSwipeActive()
+                SpaceKey(Modifier.weight(if (swipeLanguage) 4.5f else 3.5f), spaceLabel, keyColor, textColor, accentColor, recordColor,
+                    languageSwipe = swipeLanguage)
 
                 // Period — long press shows ? , ! -
                 KeyButton(".", fnColor, textColor, Modifier.weight(0.9f)) { commitChar('.') }
@@ -1696,10 +1704,12 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         keyColor: Color,
         textColor: Color,
         accentColor: Color,
-        recordColor: Color
+        recordColor: Color,
+        languageSwipe: Boolean = false
     ) {
         val recording by isRecording
         val cancelThreshold = 100f
+        var langPreview by remember { mutableStateOf<String?>(null) }
         var micCancelled by remember { mutableStateOf(false) }
         var micDragX by remember { mutableFloatStateOf(0f) }
         var spacePressed by remember { mutableStateOf(false) }
@@ -1709,19 +1719,27 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
         Box(
             modifier = modifier
                 .height(rowHeight())
-                .semantics { contentDescription = "Space. Long-press to dictate, swipe to move the cursor" }
-                .pointerInput(Unit) {
+                .semantics {
+                    contentDescription = if (languageSwipe) "Space. Long-press to dictate, swipe to change language"
+                    else "Space. Long-press to dictate, swipe to move the cursor"
+                }
+                .pointerInput(languageSwipe) {
                     // A deliberate horizontal drag starts the cursor slider. The threshold is in dp
                     // and generous: the old ~24px (≈9dp) was so small that a fast typing tap that
                     // drifted sideways got misread as a swipe and the space was dropped (words merged
                     // when typing quickly). A real cursor swipe easily clears this; a tap won't.
                     val cursorThresholdPx = 26.dp.toPx()
+                    // Further than the cursor's: a stray language change costs more than a stray caret
+                    // move. Letting go short of it still types the space.
+                    val languageCommitPx = 44.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         @Suppress("VARIABLE_WITH_REDUNDANT_INITIALIZER")
                         var totalDragX = 0f
                         var longPressed = false
                         var cursorMode = false
+                        var langSwipe = false
+                        var langOffered = false
                         var lastStepX = 0f
                         var selectedDuringSwipe = false
                         var micWasCancelled = false
@@ -1732,7 +1750,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
 
                         val longPressJob = serviceScope.launch {
                             kotlinx.coroutines.delay(LONG_PRESS_MS)
-                            if (!cursorMode) {
+                            if (!cursorMode && !langSwipe) {
                                 longPressed = true
                                 pendingSpaceTap = false   // it's a hold (dictate), not a space tap
                                 startVoiceRecording()
@@ -1750,7 +1768,21 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                                     micDragX = totalDragX
                                     micCancelled = micDragX < -cancelThreshold
                                 } else {
-                                    if (!cursorMode && kotlin.math.abs(totalDragX) > cursorThresholdPx) {
+                                    // A deliberate Shift still selects text, whichever way swipes are set.
+                                    val selecting = (isShift.value && !shiftIsAuto) || isCapsLock.value
+                                    if (languageSwipe && !cursorMode && !langSwipe && !selecting &&
+                                        kotlin.math.abs(totalDragX) > cursorThresholdPx) {
+                                        // pendingSpaceTap stays armed: nothing is decided until the finger lifts.
+                                        langSwipe = true
+                                        longPressJob.cancel()
+                                    }
+                                    if (langSwipe) {
+                                        if (kotlin.math.abs(totalDragX) >= languageCommitPx) langOffered = true
+                                        langPreview = if (kotlin.math.abs(totalDragX) >= languageCommitPx)
+                                            KeyboardPrefs.stepLanguage(enabledLangs.value, currentLang.value, if (totalDragX > 0) 1 else -1)
+                                                .uppercase().let { if (totalDragX > 0) "$it →" else "← $it" }
+                                        else null
+                                    } else if (!cursorMode && kotlin.math.abs(totalDragX) > cursorThresholdPx) {
                                         cursorMode = true
                                         cursorVisual = true
                                         pendingSpaceTap = false   // it's a swipe (cursor), not a space tap
@@ -1775,6 +1807,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         spacePressed = false
                         cursorVisual = false
                         dragXVisual = 0f
+                        langPreview = null
                         if (longPressed) {
                             // Gesture torn down mid-hold (focus moved, layout swapped): the same
                             // rule the AI key already follows — stop the mic, type nothing. Going
@@ -1784,6 +1817,17 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                             if (micWasCancelled) cancelVoiceRecording(silent = true)
                             else if (micCancelled) cancelVoiceRecording() else stopVoiceRecording()
                             micDragX = 0f
+                        } else if (langOffered && kotlin.math.abs(totalDragX) < languageCommitPx) {
+                            pendingSpaceTap = false   // dragged out and back: a change of mind, not a space
+                        } else if (langSwipe && pendingSpaceTap && !micWasCancelled &&
+                            kotlin.math.abs(totalDragX) >= languageCommitPx) {
+                            // Switched on release, not mid-drag: the swap rebuilds the letter rows, and
+                            // dragging back to the middle lets the finger change its mind.
+                            // pendingSpaceTap false here means a fast next letter already used this
+                            // press as a space, so the drift is not a swipe.
+                            pendingSpaceTap = false
+                            performKeyFeedback()
+                            cycleLanguage(if (totalDragX > 0) 1 else -1)
                         } else if (!cursorMode && pendingSpaceTap) {
                             // Normal tap, and no fast next-letter already flushed it: commit the space.
                             pendingSpaceTap = false
@@ -1818,6 +1862,8 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                         Box(Modifier.size(7.dp).background(Color.White, androidx.compose.foundation.shape.CircleShape))
                     }
                 }
+            } else if (langPreview != null) {
+                Text(text = langPreview.orEmpty(), color = accentColor, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, textAlign = TextAlign.Center)
             } else if (cursorVisual) {
                 // Scrubbing the caret: a plain thumb that tracks the drag. The gesture is what
                 // matters here — the old knurled dial and gradient rail were 86 lines of decoration
@@ -1839,7 +1885,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
                     )
                 }
             } else {
-                Text(text = label, color = textColor, fontSize = 14.sp, textAlign = TextAlign.Center)
+                Text(text = if (languageSwipe) "‹  $label  ›" else label, color = textColor, fontSize = 14.sp, textAlign = TextAlign.Center)
                 MicGlyph(textColor, Modifier.align(Alignment.TopEnd).padding(3.dp).size(14.dp))
             }
         }
@@ -3932,7 +3978,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     // Cycle the keyboard across EACH enabled language (globe key): EN → LV → RU → EN. English and
     // Latvian are separate keyboards (own dictionary each), so the globe steps through them
     // individually instead of treating en+lv as one Latin stop.
-    private fun cycleLanguage() {
+    private fun cycleLanguage(direction: Int = 1) {
         val cycle = enabledLangs.value
         if (cycle.size <= 1) {
             // Only one language enabled, so there is nothing to cycle to — but the key was still
@@ -3942,8 +3988,7 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
             openSettings("languages")
             return
         }
-        val idx = cycle.indexOf(currentLang.value)
-        val next = if (idx < 0) cycle[0] else cycle[(idx + 1) % cycle.size]
+        val next = KeyboardPrefs.stepLanguage(cycle, currentLang.value, direction)
         switchLanguage(next)
         syncImeSubtype(next)   // best-effort: tell the OS our language (UI already switched)
         updateSuggestions()
@@ -4123,6 +4168,11 @@ class KeyoService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwne
     // ---- Opt-in field diagnostics (see the readout above the toolbar) --------------------
     private val debugFieldInfo = mutableStateOf("")
     private val fieldDiagOn = mutableStateOf(false)
+    private val spaceLangSwipePref = mutableStateOf(false)
+
+    /** With one language there is nothing to swipe to: the space bar keeps moving the cursor and the
+     *  globe stays, because it is also the way to the language settings. */
+    private fun languageSwipeActive() = spaceLangSwipePref.value && enabledLangs.value.size > 1
     private var dbgStarts = 0     // how many times this field started/restarted
     private var dbgUpdates = 0    // how many selection updates the editor has sent
     private var dbgAnchors = 0    // how many cursor-anchor reports the editor has sent

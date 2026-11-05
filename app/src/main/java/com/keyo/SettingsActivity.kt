@@ -296,6 +296,7 @@ class SettingsActivity : ComponentActivity() {
         var autoCorrectTyping by remember { mutableStateOf(KeyboardPrefs.isAutocorrectTyping(this@SettingsActivity)) }
         var autoCap by remember { mutableStateOf(KeyboardPrefs.isAutoCap(this@SettingsActivity)) }
         var dblSpace by remember { mutableStateOf(KeyboardPrefs.isDoubleSpacePeriod(this@SettingsActivity)) }
+        var spaceLangSwipe by remember { mutableStateOf(KeyboardPrefs.isSpaceLanguageSwipe(this@SettingsActivity)) }
         var haptic by remember { mutableStateOf(KeyboardPrefs.getHapticStrength(this@SettingsActivity)) }
         var sound by remember { mutableStateOf(KeyboardPrefs.isSoundEnabled(this@SettingsActivity)) }
 
@@ -323,6 +324,10 @@ class SettingsActivity : ComponentActivity() {
                 Sep()
                 ToggleRow("Double-space → period", "Two spaces insert \". \"", dblSpace) {
                     dblSpace = it; KeyboardPrefs.setDoubleSpacePeriod(this@SettingsActivity, it)
+                }
+                Sep()
+                ToggleRow("Swipe space to switch language", "Swipe the space bar left or right; the 🌐 key goes away. Move the cursor from the 123 page; Shift + swipe still selects", spaceLangSwipe) {
+                    spaceLangSwipe = it; KeyboardPrefs.setSpaceLanguageSwipe(this@SettingsActivity, it)
                 }
             }
 
@@ -432,7 +437,7 @@ class SettingsActivity : ComponentActivity() {
                     }
                 }
             }
-            Hint("Each language is a separate keyboard with its own dictionary, so suggestions and autocorrect stay clean per language (e.g. Latvian \"cau\" → \"čau\"). Switch between enabled languages with the 🌐 key. English and Latvian share the same QWERTY layout; Latvian diacritics (ā č ē ī š ž…) are on long-press.")
+            Hint("Each language is a separate keyboard with its own dictionary, so suggestions and autocorrect stay clean per language (e.g. Latvian \"cau\" → \"čau\"). Switch between enabled languages with the 🌐 key, or by swiping the space bar if that is on in Typing. English and Latvian share the same QWERTY layout; Latvian diacritics (ā č ē ī š ž…) are on long-press.")
         }
     }
 
@@ -657,7 +662,7 @@ class SettingsActivity : ComponentActivity() {
     private fun HelpScreen(onBack: () -> Unit) {
         val items = listOf(
             "Dictate" to "Long-press the space bar and speak; release to insert.",
-            "Move cursor" to "Swipe left/right on the space bar.",
+            "Move cursor" to "Swipe left/right on the space bar. With \"Swipe space to switch language\" on, do this from the 123 page.",
             "Select text" to "Hold Shift, then swipe the space bar.",
             "AI task (voice)" to "Hold the comma/✨ key (left of space) and speak a command — alarm, timer, open app, search, write a message, etc.",
             "Improve text" to "Tap ✨ in the top bar: fix grammar, shorten, change tone, translate, continue writing. Works on selected text (or the whole message).",
@@ -665,7 +670,7 @@ class SettingsActivity : ComponentActivity() {
             "Caps Lock" to "Double-tap Shift; tap again to release.",
             "Accents & extra symbols" to "Long-press a letter and slide to the variant.",
             "Quick settings" to "Long-press the period and pick the ⚙ icon.",
-            "Switch language" to "Tap the 🌐 key (right of comma).",
+            "Switch language" to "Tap the 🌐 key (right of comma). With \"Swipe space to switch language\" on in Typing, swipe the space bar left or right instead.",
             "Delete" to "Tap backspace for one character, hold to repeat (it speeds up to whole words), or swipe left across it to clear the whole field.",
             "Emoji · Clipboard" to "Open them from the icons in the top bar. Long-press a clip to delete it (unpin it first if it is pinned).",
             "Cancel a recording" to "While dictating or holding ✨, slide your finger to the left and release.",

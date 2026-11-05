@@ -122,7 +122,7 @@ A Groq API key can be added on the same screen; typing works without it.
 | Run an AI task | Hold the comma key, speak a task, release |
 | Move the cursor | Swipe the space bar (hold Shift first to select) |
 | Delete | Tap backspace, hold to repeat, swipe left across it to clear the field |
-| Switch language | Tap the 🌐 globe |
+| Switch language | Tap the 🌐 globe, or swipe the space bar if "Swipe space to switch language" is on in Typing |
 | Numbers / symbols / emoji | Tap `123` |
 | New line in a chat | Shift + Enter |
 | Open settings | Long-press the period, pick ⚙ |
